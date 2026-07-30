@@ -1,0 +1,390 @@
+# Meridian platform — PRODUCTION middleware register (HARDENING H5).
+# Full middleware register with production settings. Services connect via env
+# vars from .env.prod (see ../.env.prod.template). No inline secrets — every
+# credential is a ${VAR} reference sourced from the environment/vault.
+#
+# Bring-up:  cp ../.env.prod.template ../.env.prod && fill values
+#            ./tls/gen-dev-certs.sh        # dev TLS material (prod: real PKI)
+#            docker compose --env-file ../.env.prod -f docker-compose.prod.yml up -d
+name: meridian-prod
+
+services:
+  # ---------------------------------------------------------------- Redpanda
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.7
+    restart: unless-stopped
+    # Single-broker production profile (dev-container mode NOT used).
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=2G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=redpanda:8082
+      - --set redpanda.enable_idempotence=true
+      - --set redpanda.default_topic_replications=1
+    ports:
+      - "9092:9092"   # Kafka API (internal; restrict at firewall in prod)
+      - "9644:9644"   # admin/metrics
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:\\s+true'"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 3G }
+
+  # ---------------------------------------------------------------- Postgres
+  postgres:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-meridian}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Idempotent per-service schema init (CREATE SCHEMA IF NOT EXISTS ...)
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 4G }
+
+  # ---------------------------------------------------------------- Redis
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}",
+              "--appendonly", "yes", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
+  # ---------------------------------------------------------------- Temporal
+  temporal:
+    image: temporalio/auto-setup:1.24.2
+    restart: unless-stopped
+    environment:
+      DB: postgresql
+      DB_PORT: "5432"
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD}
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/config/dynamicconfig.yaml
+    ports:
+      - "7233:7233"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health | grep -q SERVING"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 2G }
+
+  temporal-ui:
+    image: temporalio/ui:2.28.0
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: https://admin.${MERIDIAN_DOMAIN:-example.gov.ng}
+    ports:
+      - "8088:8080"
+    depends_on:
+      - temporal
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
+
+  # ---------------------------------------------------------------- OpenSearch
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      # Security plugin ON in prod profile (H5). Change admin pw on first boot
+      # via securityadmin.sh; services authenticate with OPENSEARCH credentials.
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_ADMIN_PASSWORD}
+      OPENSEARCH_JAVA_OPTS: -Xms1g -Xmx1g
+      plugins.security.ssl.http.enabled: "true"
+      plugins.security.ssl.http.pemcert_filepath: /usr/share/opensearch/config/certs/opensearch.crt
+      plugins.security.ssl.http.pemkey_filepath: /usr/share/opensearch/config/certs/opensearch.key
+      plugins.security.ssl.http.pemtrustedcas_filepath: /usr/share/opensearch/config/certs/ca.crt
+      plugins.security.allow_default_init_securityindex: "true"
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+      - ./tls/out:/usr/share/opensearch/config/certs:ro
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sku admin:$${OPENSEARCH_INITIAL_ADMIN_PASSWORD} https://localhost:9200/_cluster/health | grep -vq red"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 3G }
+
+  # ---------------------------------------------------------------- MinIO (WORM / object-lock)
+  minio:
+    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    restart: unless-stopped
+    # Start with TLS so evidence traffic is encrypted at the edge.
+    command: server /data --address ":9000" --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BROWSER_REDIRECT_URL: https://minio-console.${MERIDIAN_DOMAIN:-example.gov.ng}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+      - ./tls/out:/root/.minio/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || curl -fk https://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 2G }
+
+  # Bucket provisioning: object-lock requires creation with --with-lock at
+  # bucket-creation time (cannot be enabled retroactively).
+  minio-init:
+    image: minio/mc:RELEASE.2024-05-09T04-03-57Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mc alias set local https://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" --insecure;
+        mc mb --with-lock "local/$${EVIDENCE_BUCKET}" --insecure || true;
+        mc retention set --default COMPLIANCE "3650d" "local/$${EVIDENCE_BUCKET}" --insecure;
+        mc version enable "local/$${EVIDENCE_BUCKET}" --insecure;
+        echo "WORM bucket $${EVIDENCE_BUCKET} provisioned with object-lock";
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      EVIDENCE_BUCKET: ${MINIO_BUCKET:-meridian-evidence}
+
+  # ---------------------------------------------------------------- TigerBeetle 0.16
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.4
+    restart: unless-stopped
+    # Replica start; data file lives on named volume (pre-formatted by tb-init).
+    command: ["start", "--addresses=0.0.0.0:3000", "/data/0_0.tigerbeetle"]
+    ports:
+      - "3000:3000"
+    volumes:
+      - tbdata:/data
+    depends_on:
+      tigerbeetle-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 2G }
+
+  tigerbeetle-init:
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.4
+    command: ["format", "--cluster=0", "--replica=0", "--replica-count=1", "/data/0_0.tigerbeetle"]
+    volumes:
+      - tbdata:/data
+    # exits 0 (or 1 if already formatted — start script tolerates)
+
+  # ---------------------------------------------------------------- Keycloak 25
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    restart: unless-stopped
+    command: start --hostname-strict=true --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-meridian}
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      # HTTPS hostname for prod issuer (H2/H5).
+      KC_HOSTNAME: https://keycloak.${MERIDIAN_DOMAIN:-example.gov.ng}
+      KC_HOSTNAME_STRICT: "true"
+      KC_HTTP_ENABLED: "false"
+      KC_HTTPS_CERTIFICATE_FILE: /opt/keycloak/conf/certs/keycloak.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /opt/keycloak/conf/certs/keycloak.key
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./keycloak/realm-meridian.json:/opt/keycloak/data/import/realm-meridian.json:ro
+      - ./tls/out:/opt/keycloak/conf/certs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fk https://localhost:8443/health/ready || (exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.0\r\n\r\n' >&3 && grep -q '200' <&3)"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 2G }
+
+  # ---------------------------------------------------------------- Permify
+  permify:
+    image: ghcr.io/permify/permify:v1.0.0
+    restart: unless-stopped
+    command: serve
+    environment:
+      PERMIFY_DATABASE_ENGINE: postgres
+      PERMIFY_DATABASE_URI: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-meridian}?sslmode=disable
+      PERMIFY_DATABASE_MAX_OPEN_CONNECTIONS: "20"
+    ports:
+      - "3476:3476"   # REST
+      - "3478:3478"   # gRPC
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3476/healthz || wget -qO- http://localhost:3476/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
+  # ---------------------------------------------------------------- APISIX + etcd
+  etcd:
+    image: bitnami/etcd:3.5
+    restart: unless-stopped
+    environment:
+      ETCD_ROOT_PASSWORD: ${ETCD_ROOT_PASSWORD}
+      ALLOW_NONE_AUTHENTICATION: "no"
+    ports:
+      - "2379:2379"
+    volumes:
+      - etcd-data:/bitnami/etcd
+    healthcheck:
+      test: ["CMD-SHELL", "etcdctl endpoint health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
+  apisix:
+    image: apache/apisix:3.9.0-debian
+    restart: unless-stopped
+    # NOTE: APISIX terminates public TLS and is the WAF enforcement point
+    # (edge-policy svc flips waf mode detect→enforce via Admin API; see
+    # docs/security.md F9/F10). SSL routes are synced from etcd/edge-policy.
+    environment:
+      APISIX_ADMIN_KEY: ${APISIX_ADMIN_KEY}
+      ETCD_PASSWORD: ${ETCD_ROOT_PASSWORD}
+    ports:
+      - "9080:9080"   # HTTP → redirect to HTTPS in prod route config
+      - "9443:9443"   # HTTPS gateway
+      - "9180:9180"   # Admin API (bind to localhost / VPN only)
+    volumes:
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./tls/out:/usr/local/apisix/conf/certs:ro
+    depends_on:
+      etcd:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9080/apisix/status || curl -sf http://localhost:9180/apisix/admin/routes -H 'X-API-KEY: '$${APISIX_ADMIN_KEY} >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 2G }
+
+  # ---------------------------------------------------------------- Trino + Iceberg REST (sovereign analytics)
+  iceberg-rest:
+    image: tabulario/iceberg-rest:1.5.2
+    restart: unless-stopped
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_REGION: us-east-1
+      CATALOG_WAREHOUSE: s3://meridian-warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: https://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+    ports:
+      - "8181:8181"
+    depends_on:
+      minio:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
+  trino:
+    image: trinodb/trino:448
+    restart: unless-stopped
+    # Catalog config (iceberg + minio warehouse) mounted from ./trino/catalog.
+    ports:
+      - "8444:8080"
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog:ro
+    depends_on:
+      - iceberg-rest
+      - minio
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info | grep -q '\"starting\":false'"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 4G }
+
+volumes:
+  pgdata: {}
+  redpanda-data: {}
+  redis-data: {}
+  opensearch-data: {}
+  minio-data: {}
+  tbdata: {}
+  etcd-data: {}

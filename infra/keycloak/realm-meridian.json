@@ -1,0 +1,325 @@
+{
+  "id": "meridian",
+  "realm": "meridian",
+  "displayName": "Meridian TaxTech Platform",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "refreshTokenMaxReuse": 0,
+  "revokeRefreshToken": true,
+  "defaultSignatureAlgorithm": "RS256",
+  "roles": {
+    "realm": [
+      { "name": "admin", "description": "Platform administrator (NRS ops)" },
+      { "name": "board", "description": "Governance board — pack publish & gate flips" },
+      { "name": "operator", "description": "Back-office operator" },
+      { "name": "auditor", "description": "Read-only audit & evidence access" },
+      { "name": "practitioner", "description": "Tax practitioner (T13 case mgmt)" },
+      { "name": "taxpayer", "description": "Registered taxpayer / operator self-service" },
+      { "name": "agent", "description": "Field agent (T5/T12 capture & payments)" }
+    ]
+  },
+  "groups": [
+    {
+      "name": "dev",
+      "path": "/dev",
+      "attributes": {
+        "warning": ["DEV PROFILE ONLY — do not import into production Keycloak without removing this group"]
+      },
+      "realmRoles": ["admin"],
+      "subGroups": []
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@meridian.local",
+      "email": "admin@meridian.local",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Dev",
+      "lastName": "Admin",
+      "groups": ["/dev"],
+      "realmRoles": ["admin"],
+      "credentials": [
+        { "type": "password", "value": "admin123", "temporary": false }
+      ],
+      "attributes": {
+        "profile": ["DEV-ONLY — seeded per SPEC §2; DELETE in production"]
+      }
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "meridian-services",
+      "description": "Audience scope: marks tokens as valid for all Meridian services (aud=meridian-services)",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "meridian-services-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "meridian-services",
+            "included.custom.audience": "meridian-services",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "tenant-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "tenant_id",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "defaultDefaultClientScopes": ["profile", "email", "roles", "web-origins", "acr"],
+  "defaultOptionalClientScopes": ["meridian-services", "offline_access", "microprofile-jwt"],
+  "clients": [
+    {
+      "clientId": "admin-console",
+      "name": "Meridian Admin Console (management plane)",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "redirectUris": [
+        "http://localhost:5173/*",
+        "http://localhost:4173/*",
+        "https://admin.${MERIDIAN_DOMAIN}/*"
+      ],
+      "webOrigins": ["http://localhost:5173", "https://admin.${MERIDIAN_DOMAIN}"],
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"]
+    },
+    {
+      "clientId": "compliance-portal",
+      "name": "Compliance Portal (taxpayer/practitioner)",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "redirectUris": [
+        "http://localhost:5174/*",
+        "https://compliance.${MERIDIAN_DOMAIN}/*"
+      ],
+      "webOrigins": ["http://localhost:5174", "https://compliance.${MERIDIAN_DOMAIN}"],
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"]
+    },
+    {
+      "clientId": "gov-console",
+      "name": "NRS Gov Console (sovereign zone)",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "redirectUris": [
+        "http://localhost:5175/*",
+        "https://gov.${MERIDIAN_DOMAIN}/*"
+      ],
+      "webOrigins": ["http://localhost:5175", "https://gov.${MERIDIAN_DOMAIN}"],
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"]
+    },
+    {
+      "clientId": "agent-pwa",
+      "name": "Agent PWA (offline-first field capture)",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "redirectUris": [
+        "http://localhost:5176/*",
+        "https://agent.${MERIDIAN_DOMAIN}/*"
+      ],
+      "webOrigins": ["http://localhost:5176", "https://agent.${MERIDIAN_DOMAIN}"],
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services", "offline_access"]
+    },
+    {
+      "clientId": "operator-pwa",
+      "name": "Operator PWA (taxpayer self-service)",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "redirectUris": [
+        "http://localhost:5177/*",
+        "https://pay.${MERIDIAN_DOMAIN}/*"
+      ],
+      "webOrigins": ["http://localhost:5177", "https://pay.${MERIDIAN_DOMAIN}"],
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services", "offline_access"]
+    },
+    {
+      "clientId": "meridian-services",
+      "name": "Meridian Services audience marker (resource server)",
+      "enabled": true,
+      "bearerOnly": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "rp-registry",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "${KC_SECRET_RP_REGISTRY}",
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"]
+    },
+    {
+      "clientId": "tin-graph",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "${KC_SECRET_TIN_GRAPH}",
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"]
+    },
+    {
+      "clientId": "ledger",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "${KC_SECRET_LEDGER}",
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"]
+    },
+    {
+      "clientId": "einvoicing",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "${KC_SECRET_EINVOICING}",
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"]
+    },
+    {
+      "clientId": "onboarding",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "${KC_SECRET_ONBOARDING}",
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"]
+    },
+    {
+      "clientId": "enclave-gateway",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "${KC_SECRET_ENCLAVE_GATEWAY}",
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"],
+      "attributes": {
+        "use.refresh.tokens": "false",
+        "note": "Sole north-south audited gateway; mTLS mandatory in prod profile (see docs/security.md)"
+      }
+    },
+    {
+      "clientId": "admin-api",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "${KC_SECRET_ADMIN_API}",
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"]
+    },
+    {
+      "clientId": "audit-evidence",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "${KC_SECRET_AUDIT_EVIDENCE}",
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": ["meridian-services"]
+    }
+  ]
+}
