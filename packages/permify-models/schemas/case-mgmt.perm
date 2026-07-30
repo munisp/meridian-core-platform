@@ -1,0 +1,18 @@
+// Case management relations (used by compliance-suite case-mgmt).
+entity user {}
+
+entity matter {
+    relation counsel @user
+    relation client @user
+    relation supervising_partner @user
+    permission view = counsel + client + supervising_partner
+    permission edit = counsel + supervising_partner
+}
+
+entity doc {
+    relation matter @matter
+    relation owner @user
+    permission privileged = owner + matter.counsel
+    permission view = owner + matter.view
+    permission share = owner + matter.supervising_partner
+}
