@@ -37,11 +37,11 @@ type Index struct {
 	mu       sync.RWMutex
 	docs     map[string]*Doc
 	postings map[string]map[string]int // term -> docID -> term frequency
-	st       *store.Store              // persistence (docs collection)
+	st       store.DocStore              // persistence (docs collection)
 }
 
 // New creates/restores an index backed by the given store (may be nil).
-func New(st *store.Store) *Index {
+func New(st store.DocStore) *Index {
 	ix := &Index{docs: map[string]*Doc{}, postings: map[string]map[string]int{}, st: st}
 	if st != nil {
 		raws, err := st.List("docs")
