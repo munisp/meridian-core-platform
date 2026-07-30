@@ -24,7 +24,7 @@ type server struct {
 
 func main() {
 	dir := httpx.Env("DATA_DIR", "./data")
-	st, err := store.Open(dir)
+	st, err := store.OpenFromEnv(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	ws, err := evidence.NewWormStore(dir+"/worm", st)
+	ws, err := evidence.NewWormStoreFromEnv(dir+"/worm", st)
 	if err != nil {
 		log.Fatal(err)
 	}
