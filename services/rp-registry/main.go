@@ -58,7 +58,7 @@ type ConsumerPin struct {
 }
 
 type server struct {
-	st  *store.Store
+	st store.DocStore
 	out outbox.Store
 }
 
@@ -85,7 +85,7 @@ func part(p []string, i int) string {
 
 func main() {
 	dir := httpx.Env("DATA_DIR", "./data")
-	st, err := store.Open(dir)
+	st, err := store.OpenFromEnv(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
