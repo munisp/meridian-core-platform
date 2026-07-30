@@ -34,7 +34,7 @@ no raw NIN/TIN/MSISDN is ever logged (tin_hash pseudonymisation, SPEC §1.3).
 Forbidden-by-construction (SPEC §5): there is no code path for F9 (enclave →
 market direct data push) or F10 (unaudited cross-zone call).
 
-1. **enclave-gateway** — routing table contains only registered cross-zone flow ids;
+1. **enclave-gateway** — routing table contains only F1–F8 handlers; unknown
    flow ids are denied at the middleware layer before schema validation.
 2. **Network** — sovereign-zone egress to the market zone is denied except via
    the gateway listener; compose networks isolate `meridian-prod` bridges.
