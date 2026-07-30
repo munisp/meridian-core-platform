@@ -63,7 +63,7 @@ var defaultRoutes = []RouteSpec{
 }
 
 type server struct {
-	st *store.Store
+	st store.DocStore
 }
 
 // wafMode returns the persisted WAF mode (default detect).
@@ -112,7 +112,7 @@ func splitUpstream(u string) (string, string) {
 
 func main() {
 	dir := httpx.Env("DATA_DIR", "./data")
-	st, err := store.Open(dir)
+	st, err := store.OpenFromEnv(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
