@@ -1,21 +1,20 @@
-go 1.23.0
+go 1.25.0
 
 use (
 	./packages/events
+	./packages/permify-models
 	./packages/rulepack-schema
 	./packages/schemas/go
-	./packages/permify-models
 	./packages/temporal-sdkx
-	./workflows-go
-	./services/rp-registry
-	./services/tin-graph
+	./services/admin-api
+	./services/audit-evidence
+	./services/consent
+	./services/edge-policy
+	./services/geo
 	./services/ledger
 	./services/notification
-	./services/audit-evidence
-	./services/geo
-	./services/consent
+	./services/rp-registry
 	./services/search-indexer
-	./services/edge-policy
-	./services/admin-api
+	./services/tin-graph
+	./workflows-go
 )
-
