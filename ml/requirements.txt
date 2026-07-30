@@ -1,0 +1,21 @@
+# Meridian ML stack — CPU only (plan-ml.md Stage 1)
+# torch CPU wheel: pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2
+numpy>=1.26
+scikit-learn>=1.4
+pyarrow>=15
+duckdb>=0.10
+pandas>=2.1
+pyyaml>=6.0
+psycopg[binary]>=3.1   # prod Postgres extract (H1: DATABASE_URL)
+
+# --- serving/monitoring (Agent B) ---
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+kafka-python-ng>=2.2   # plain kafka client fallback per env selection
+
+# --- optional extras (install manually; import-guarded) ---
+# ray[default]>=2.9    # distributed retraining (falls back to local)
+# mlflow>=2.11         # registry adapter; active only if MLFLOW_TRACKING_URI set
+# pytest               # tests
