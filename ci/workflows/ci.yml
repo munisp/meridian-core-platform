@@ -1,0 +1,63 @@
+name: ci
+on:
+  push:
+    branches: [main, "hardening/**"]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Build / vet / test each Go module
+        run: |
+          set -e
+          for d in $(find . -name go.mod -not -path "*/node_modules/*" -exec dirname {} \;); do
+            echo "== $d"
+            (cd "$d" && go build ./... && go vet ./... && go test ./... -race -count=1)
+          done
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test Python services
+        run: |
+          set -e
+          pip install pytest httpx
+          for d in services/rules-engine services/feature-store services/reg-watch services/settlement; do
+            if [ -f "$d/requirements.txt" ]; then pip install -r "$d/requirements.txt"; fi
+            if [ -d "$d/tests" ]; then (cd "$d" && python -m pytest -q); fi
+            (cd "$d" && python -c "import compileall,sys; sys.exit(0 if compileall.compile_dir('.', quiet=1) else 1)")
+          done
+
+  admin-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
+
+  geo-rs:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: geo-rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked
