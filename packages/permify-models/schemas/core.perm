@@ -1,0 +1,18 @@
+// Meridian core Permify schema family [canonical DSL for the Permify server].
+// Dev checking uses the simplified evaluator in checker.go with tuples.json.
+entity user {}
+
+entity tenant {
+    relation admin @user
+    relation operator @user
+    relation auditor @user
+    permission manage = admin
+    permission operate = admin + operator
+    permission read = admin + operator + auditor
+}
+
+entity service_account {
+    relation owner @user
+    relation tenant @tenant
+    permission invoke = owner + tenant.admin
+}

@@ -1,0 +1,180 @@
+{
+  "_comment": "Consumer lockfile: pinned rp-* versions for core-platform consumers. sha256 filled by the ceremony in meridian-rule-packs (tools/ceremony.py); values below are [seed] pins at 1.0.0.",
+  "pins": {
+    "rp-ubl-bis": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-mbs-business-rules": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-wht-2024": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-tp-2018": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-etr-nta": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-etr-scope": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-etr-cfc": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-globe-oecd": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-gir-schema": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-carf-schema": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-nta-vasp-duties": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-nta-digital-assets": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-sec-vasp-rules": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-asset-taxonomy": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-vat-rates": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-vat-exempt-basket": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-vat-zerorated-basket": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-vat-attribution-mode": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-platform-collectors": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-presumptive-federal": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-presumptive-lagos": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-presumptive-kano": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-turnover-bands": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-exemption-nta": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-attribution-formula": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-fmt-lagos": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-fmt-fct": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-identity-match-thresholds": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-procedure-ombud": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-procedure-tat": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-ntaa-penalties": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-deposit-20pct": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-education-ng": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-disclosure-control": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    },
+    "rp-bank-thresholds": {
+      "version": "1.0.0",
+      "sha256": null,
+      "subject_to_regazette": true
+    }
+  }
+}

@@ -1,0 +1,27 @@
+# [seed] Dev copy of rp-identity-match-thresholds (canonical in meridian-rule-packs).
+id: rp-identity-match-thresholds
+version: 1.0.0
+effective_from: 2025-01-01
+effective_to: null
+status: published
+subject_to_regazette: true
+provenance:
+  as_passed: "NRS identity resolution operating standard, as passed"
+  as_gazetted: null
+  source_citation: "NRS Identity Resolution Standard 2025"
+signed: null
+rules:
+  - id: identity.match.config
+    description: "Weighted field-match thresholds for entity resolution"
+    when: {}
+    then:
+      set:
+        auto_match_threshold: 0.85
+        review_threshold: 0.60
+        weights:
+          name: 0.30
+          phone: 0.25
+          email: 0.20
+          address: 0.10
+          nin: 0.15
+      narrate: "auto-match >= 0.85, review queue >= 0.60, else new entity"

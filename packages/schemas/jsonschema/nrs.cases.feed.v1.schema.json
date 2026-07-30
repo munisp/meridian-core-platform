@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridian.nrs/schemas/nrs.cases.feed.v1.schema.json",
+  "title": "T4 case feed payload (data of nrs.cases.feed.v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "reference": {"type": "string"},
+    "amount_kobo": {"type": "integer", "minimum": 0},
+    "tin_hash": {"type": "string", "minLength": 64, "maxLength": 64}
+  }
+}

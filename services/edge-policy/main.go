@@ -1,0 +1,169 @@
+// edge-policy — APISIX route policy distribution (SPEC 2).
+// Generates the APISIX route table YAML per plane from the service registry
+// and manages the WAF mode (detect|enforce), persisted across restarts.
+package main
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"sort"
+	"strings"
+
+	"github.com/munisp/meridian-core-platform/packages/events/auth"
+	"github.com/munisp/meridian-core-platform/packages/events/httpx"
+	"github.com/munisp/meridian-core-platform/packages/events/store"
+)
+
+const (
+	service = "edge-policy"
+	version = "0.1.0"
+)
+
+// RouteSpec is one edge route: public path prefix -> upstream service.
+type RouteSpec struct {
+	ID         string   `json:"id"`
+	Plane      string   `json:"plane"` // core|market|sovereign
+	Name       string   `json:"name"`
+	PathPrefix string   `json:"path_prefix"`
+	Methods    []string `json:"methods"`
+	Upstream   string   `json:"upstream"` // host:port
+	Service    string   `json:"service"`
+	Auth       bool     `json:"auth"`
+}
+
+// defaultRoutes is the core route table (planes append their own entries
+// via ROUTES_EXTRA_JSON in deployments).
+var defaultRoutes = []RouteSpec{
+	{ID: "core-rp-registry", Plane: "core", Name: "rp-registry", PathPrefix: "/v1/packs", Methods: []string{"GET", "POST"}, Upstream: "rp-registry:8002", Service: "rp-registry", Auth: true},
+	{ID: "core-rp-consumers", Plane: "core", Name: "rp-registry-consumers", PathPrefix: "/v1/consumers", Methods: []string{"GET", "POST"}, Upstream: "rp-registry:8002", Service: "rp-registry", Auth: true},
+	{ID: "core-tin-graph", Plane: "core", Name: "tin-graph", PathPrefix: "/v1/tin", Methods: []string{"POST"}, Upstream: "tin-graph:8003", Service: "tin-graph", Auth: true},
+	{ID: "core-tin-verify", Plane: "core", Name: "tin-graph-verify", PathPrefix: "/v1/verify", Methods: []string{"POST"}, Upstream: "tin-graph:8003", Service: "tin-graph", Auth: true},
+	{ID: "core-tin-entities", Plane: "core", Name: "tin-graph-entities", PathPrefix: "/v1/entities", Methods: []string{"GET", "POST"}, Upstream: "tin-graph:8003", Service: "tin-graph", Auth: true},
+	{ID: "core-rules-engine", Plane: "core", Name: "rules-engine", PathPrefix: "/v1/evaluate", Methods: []string{"POST"}, Upstream: "rules-engine:8001", Service: "rules-engine", Auth: true},
+	{ID: "core-ledger-accounts", Plane: "core", Name: "ledger-accounts", PathPrefix: "/v1/accounts", Methods: []string{"GET", "POST"}, Upstream: "ledger:8010", Service: "ledger", Auth: true},
+	{ID: "core-ledger-transfers", Plane: "core", Name: "ledger-transfers", PathPrefix: "/v1/transfers", Methods: []string{"GET", "POST"}, Upstream: "ledger:8010", Service: "ledger", Auth: true},
+	{ID: "core-audit", Plane: "core", Name: "audit-evidence", PathPrefix: "/v1/audit", Methods: []string{"GET", "POST"}, Upstream: "audit-evidence:8004", Service: "audit-evidence", Auth: true},
+	{ID: "core-evidence", Plane: "core", Name: "evidence-worm", PathPrefix: "/v1/evidence", Methods: []string{"GET", "POST"}, Upstream: "audit-evidence:8004", Service: "audit-evidence", Auth: true},
+	{ID: "core-tat", Plane: "core", Name: "tat", PathPrefix: "/v1/tat", Methods: []string{"POST"}, Upstream: "audit-evidence:8004", Service: "audit-evidence", Auth: true},
+	{ID: "core-geo", Plane: "core", Name: "geo", PathPrefix: "/v1/attribution", Methods: []string{"POST"}, Upstream: "geo:8005", Service: "geo", Auth: true},
+	{ID: "core-geo-boundaries", Plane: "core", Name: "geo-boundaries", PathPrefix: "/v1/boundaries", Methods: []string{"GET"}, Upstream: "geo:8005", Service: "geo", Auth: true},
+	{ID: "core-notification", Plane: "core", Name: "notification", PathPrefix: "/v1/send", Methods: []string{"POST"}, Upstream: "notification:8006", Service: "notification", Auth: true},
+	{ID: "core-consent", Plane: "core", Name: "consent", PathPrefix: "/v1/consents", Methods: []string{"GET", "POST"}, Upstream: "consent:8007", Service: "consent", Auth: true},
+	{ID: "core-regwatch", Plane: "core", Name: "reg-watch", PathPrefix: "/v1/gates", Methods: []string{"GET", "POST"}, Upstream: "reg-watch:8011", Service: "reg-watch", Auth: true},
+	{ID: "core-features", Plane: "core", Name: "feature-store", PathPrefix: "/v1/features", Methods: []string{"GET", "POST"}, Upstream: "feature-store:8012", Service: "feature-store", Auth: true},
+	{ID: "core-settlement", Plane: "core", Name: "settlement", PathPrefix: "/v1/recon", Methods: []string{"GET", "POST"}, Upstream: "settlement:8013", Service: "settlement", Auth: true},
+	{ID: "core-search", Plane: "core", Name: "search-indexer", PathPrefix: "/v1/search", Methods: []string{"GET"}, Upstream: "search-indexer:8008", Service: "search-indexer", Auth: true},
+	{ID: "core-edge", Plane: "core", Name: "edge-policy", PathPrefix: "/v1/routes", Methods: []string{"GET"}, Upstream: "edge-policy:8009", Service: "edge-policy", Auth: true},
+	// market + sovereign plane anchor routes (plane services register their own)
+	{ID: "market-einvoicing", Plane: "market", Name: "einvoicing", PathPrefix: "/v1/invoices", Methods: []string{"GET", "POST"}, Upstream: "einvoicing:8101", Service: "einvoicing", Auth: true},
+	{ID: "market-wht", Plane: "market", Name: "wht", PathPrefix: "/v1/wht", Methods: []string{"GET", "POST"}, Upstream: "wht:8103", Service: "wht", Auth: true},
+	{ID: "market-pos-vat", Plane: "market", Name: "pos-vat", PathPrefix: "/v1/pos", Methods: []string{"GET", "POST"}, Upstream: "pos-vat:8106", Service: "pos-vat", Auth: true},
+	{ID: "sovereign-enclave-gateway", Plane: "sovereign", Name: "enclave-gateway", PathPrefix: "/v1/enclave", Methods: []string{"GET", "POST"}, Upstream: "enclave-gateway:8204", Service: "enclave-gateway", Auth: true},
+}
+
+type server struct {
+	st *store.Store
+}
+
+// wafMode returns the persisted WAF mode (default detect).
+func (s *server) wafMode() string {
+	var v struct {
+		Mode string `json:"mode"`
+	}
+	if err := s.st.Get("config", "waf_mode", &v); err != nil || (v.Mode != "enforce" && v.Mode != "detect") {
+		return "detect"
+	}
+	return v.Mode
+}
+
+// renderAPISIX renders the route table + WAF mode as APISIX standalone YAML.
+func renderAPISIX(routes []RouteSpec, wafMode string) string {
+	var b strings.Builder
+	b.WriteString("# Generated by meridian edge-policy — APISIX standalone config\n")
+	b.WriteString("# WAF mode: " + wafMode + "\n")
+	b.WriteString("routes:\n")
+	sorted := append([]RouteSpec(nil), routes...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	for _, r := range sorted {
+		host, port := splitUpstream(r.Upstream)
+		fmt.Fprintf(&b, "  - id: %s\n    name: %s\n    uris:\n      - %s\n      - %s/*\n    methods: [%s]\n",
+			r.ID, r.Name, r.PathPrefix, r.PathPrefix, strings.Join(r.Methods, ", "))
+		b.WriteString("    plugins:\n")
+		if r.Auth {
+			b.WriteString("      jwt-auth: {}\n")
+		}
+		if wafMode == "enforce" {
+			b.WriteString("      ua-restriction:\n        denylist: [\"blocked-agent\"]\n")
+		}
+		fmt.Fprintf(&b, "    upstream:\n      type: roundrobin\n      nodes:\n        \"%s\": %s\n", host, port)
+	}
+	b.WriteString("#END\n")
+	return b.String()
+}
+
+func splitUpstream(u string) (string, string) {
+	parts := strings.SplitN(u, ":", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return u, "80"
+}
+
+func main() {
+	dir := httpx.Env("DATA_DIR", "./data")
+	st, err := store.Open(dir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := &server{st: st}
+
+	mux := http.NewServeMux()
+	httpx.RegisterStandard(mux, service, version, nil)
+	mux.HandleFunc("GET /v1/routes", s.routes)
+	mux.HandleFunc("POST /v1/waf/mode", auth.RequireRole("admin", s.setWAF))
+	mux.HandleFunc("GET /v1/waf/mode", func(w http.ResponseWriter, r *http.Request) {
+		httpx.JSON(w, http.StatusOK, map[string]any{"mode": s.wafMode()})
+	})
+
+	addr := ":" + httpx.Port("8009")
+	log.Printf("%s %s (waf=%s)", service, version, s.wafMode())
+	log.Fatal(httpx.ListenAndServe(addr, auth.Middleware(mux)))
+}
+
+func (s *server) routes(w http.ResponseWriter, r *http.Request) {
+	plane := r.URL.Query().Get("plane")
+	format := r.URL.Query().Get("format")
+	routes := []RouteSpec{}
+	for _, rs := range defaultRoutes {
+		if plane == "" || rs.Plane == plane {
+			routes = append(routes, rs)
+		}
+	}
+	if format == "json" {
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"waf_mode": s.wafMode(), "routes": routes, "count": len(routes),
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/yaml")
+	w.Write([]byte(renderAPISIX(routes, s.wafMode())))
+}
+
+func (s *server) setWAF(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := httpx.Decode(r, &req); err != nil || (req.Mode != "detect" && req.Mode != "enforce") {
+		httpx.BadRequest(w, "mode must be detect|enforce")
+		return
+	}
+	claims, _ := auth.FromContext(r.Context())
+	if err := s.st.Put("config", "waf_mode", map[string]any{
+		"mode": req.Mode, "set_by": claims.Sub, "set_at": httpx.Env("HOSTNAME", "dev"),
+	}); err != nil {
+		httpx.Internal(w, "%v", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"mode": req.Mode})
+}

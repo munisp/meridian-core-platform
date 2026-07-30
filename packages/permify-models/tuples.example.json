@@ -1,0 +1,10 @@
+{
+  "tuples": [
+    {"object": "tenant:t1", "relation": "admin", "subject": "user:admin@meridian.local"},
+    {"object": "tenant:t1", "relation": "operator", "subject": "user:ops@meridian.local"},
+    {"object": "matter:m1", "relation": "counsel", "subject": "user:lawyer@firm.ng"},
+    {"object": "matter:m1", "relation": "client", "subject": "user:client@co.ng"},
+    {"object": "doc:d1", "relation": "owner", "subject": "user:lawyer@firm.ng"},
+    {"object": "doc:d1", "relation": "matter", "subject": "matter:m1"}
+  ]
+}
