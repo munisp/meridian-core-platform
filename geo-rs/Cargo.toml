@@ -1,0 +1,15 @@
+[package]
+name = "geo-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Meridian spatial engine: point-in-polygon, haversine prefilter, NG state/LGA attribution"
+
+[dependencies]
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
