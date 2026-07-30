@@ -1,0 +1,37 @@
+# APISIX prod config (etcd-backed). Routes are distributed by edge-policy svc.
+apisix:
+  node_listen: 9080
+  enable_admin: true
+  enable_ipv6: false
+  ssl:
+    enable: true
+    listen:
+      - port: 9443
+        enable_http2: true
+deployment:
+  admin:
+    admin_key:
+      - name: admin
+        key: ${APISIX_ADMIN_KEY}
+        role: admin
+  etcd:
+    host:
+      - "http://etcd:2379"
+    prefix: /apisix
+    timeout: 30
+    user: root
+    password: ${ETCD_ROOT_PASSWORD}
+# WAF note: edge-policy flips mode detect→enforce (POST /v1/waf/mode); APISIX
+# plugin config per route is synced by edge-policy from this register.
+plugins:
+  - cors
+  - jwt-auth
+  - openid-connect
+  - limit-count
+  - prometheus
+  - ip-restriction
+plugin_attr:
+  prometheus:
+    export_addr:
+      ip: 0.0.0.0
+      port: 9091
