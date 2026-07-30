@@ -103,6 +103,12 @@ func Env(key, def string) string {
 	return def
 }
 
+// ProfileLog emits the HARDENING H1 startup profile line:
+// "profile=<dev|prod> component=<name> <detail>".
+func ProfileLog(component, profile, format string, args ...any) {
+	log.Printf("profile=%s component=%s %s", profile, component, fmt.Sprintf(format, args...))
+}
+
 // Port returns the configured PORT (default given).
 func Port(def string) string { return Env("PORT", def) }
 

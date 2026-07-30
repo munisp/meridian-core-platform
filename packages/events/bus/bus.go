@@ -32,8 +32,18 @@ type Bus interface {
 //	EVENT_BUS=kafka             -> PandaproxyBus using KAFKA_PROXY_URL
 //	                               (default http://localhost:8082)
 func NewFromEnv() Bus {
+	// Prod profile: KAFKA_BROKERS set -> real franz-go client (HARDENING H3).
+	if os.Getenv("KAFKA_BROKERS") != "" {
+		if kb, err := NewKafkaFromEnv(); err != nil {
+			log.Printf("profile=dev component=bus kafka init failed (%v); inproc fallback", err)
+		} else {
+			log.Printf("profile=prod component=bus brokers=%s", os.Getenv("KAFKA_BROKERS"))
+			return kb
+		}
+	}
 	switch os.Getenv("EVENT_BUS") {
 	case "", "inproc":
+		log.Printf("profile=dev component=bus inproc")
 		return NewInproc()
 	case "kafka":
 		proxy := os.Getenv("KAFKA_PROXY_URL")
