@@ -159,3 +159,101 @@ class SQLiteKV:
 
     def close(self) -> None:
         self.db.close()
+
+
+# --- Postgres adapter (DATABASE_URL; HARDENING H3) ---
+
+PG_DDL = """
+CREATE TABLE IF NOT EXISTS meridian_documents (
+    collection TEXT NOT NULL,
+    id         TEXT NOT NULL,
+    doc        JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (collection, id)
+);
+"""
+
+
+class PgStore:
+    """Postgres-backed document store (psycopg[binary]) with the same
+    interface as JsonStore. Schema is auto-migrated idempotently on open."""
+
+    def __init__(self, dsn: str) -> None:
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise RuntimeError("psycopg[binary] required for DATABASE_URL") from exc
+        self._lock = threading.RLock()
+        self.db = psycopg.connect(dsn, autocommit=True)
+        with self.db.cursor() as cur:
+            cur.execute(PG_DDL)
+
+    def put(self, coll: str, id_: str, doc: Any) -> None:
+        with self._lock, self.db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO meridian_documents (collection, id, doc) VALUES (%s,%s,%s) "
+                "ON CONFLICT (collection, id) DO UPDATE SET doc=EXCLUDED.doc, updated_at=now()",
+                (coll, id_, json.dumps(doc)))
+
+    def get(self, coll: str, id_: str, default: Any = None) -> Any:
+        with self._lock, self.db.cursor() as cur:
+            cur.execute(
+                "SELECT doc FROM meridian_documents WHERE collection=%s AND id=%s",
+                (coll, id_))
+            row = cur.fetchone()
+        return row[0] if row else default
+
+    def delete(self, coll: str, id_: str) -> bool:
+        with self._lock, self.db.cursor() as cur:
+            cur.execute(
+                "DELETE FROM meridian_documents WHERE collection=%s AND id=%s",
+                (coll, id_))
+            return cur.rowcount > 0
+
+    def list(self, coll: str) -> list[Any]:
+        with self._lock, self.db.cursor() as cur:
+            cur.execute(
+                "SELECT doc FROM meridian_documents WHERE collection=%s ORDER BY id",
+                (coll,))
+            return [r[0] for r in cur.fetchall()]
+
+    def items(self, coll: str) -> list[tuple[str, Any]]:
+        with self._lock, self.db.cursor() as cur:
+            cur.execute(
+                "SELECT id, doc FROM meridian_documents WHERE collection=%s ORDER BY id",
+                (coll,))
+            return [(r[0], r[1]) for r in cur.fetchall()]
+
+    def update(self, coll: str, id_: str, fn: Callable[[Any], Any]) -> Any:
+        with self._lock, self.db.cursor() as cur:
+            cur.execute(
+                "SELECT doc FROM meridian_documents WHERE collection=%s AND id=%s FOR UPDATE",
+                (coll, id_))
+            row = cur.fetchone()
+            nxt = fn(row[0] if row else None)
+            cur.execute(
+                "INSERT INTO meridian_documents (collection, id, doc) VALUES (%s,%s,%s) "
+                "ON CONFLICT (collection, id) DO UPDATE SET doc=EXCLUDED.doc, updated_at=now()",
+                (coll, id_, json.dumps(nxt)))
+            return nxt
+
+    def close(self) -> None:
+        self.db.close()
+
+
+def open_store(dir_: str | os.PathLike | None = None):
+    """HARDENING H1 selection: DATABASE_URL set -> PgStore (profile=prod);
+    otherwise the embedded JsonStore at dir_ (profile=dev). Never fails
+    because DATABASE_URL is unset; falls back on connection errors."""
+    import logging
+    log = logging.getLogger("meridian.store")
+    dsn = os.environ.get("DATABASE_URL", "")
+    if dsn:
+        try:
+            log.info("profile=prod component=store postgres")
+            return PgStore(dsn)
+        except Exception as exc:  # connection/auth errors -> dev fallback
+            log.warning("profile=dev component=store postgres unavailable (%s); embedded fallback", exc)
+    else:
+        log.info("profile=dev component=store embedded dir=%s", dir_)
+    return JsonStore(dir_)
