@@ -175,6 +175,7 @@ type Object struct {
 	StoragePath string         `json:"-"`
 }
 
+// WormStore persists evidence objects content-addressed under dir.
 // WormStore persists evidence objects content-addressed under dir (dev) or
 // in a MinIO object-locked bucket (prod, see minio.go).
 type WormStore struct {

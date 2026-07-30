@@ -1,4 +1,4 @@
-# Package auth implements the Meridian auth conventions (SPEC 1.3):
+// Package auth implements the Meridian auth conventions (SPEC 1.3):
 // Bearer JWT (HS256 dev secret MERIDIAN_DEV_JWT_SECRET, claims sub/roles/
 // tenant_id); AUTH_MODE=dev also accepts X-Dev-Role: admin|operator|auditor.
 package auth
