@@ -55,8 +55,7 @@ mv "$OUT/enclave-gateway-mtls.crt" "$OUT/enclave-gateway-client.crt"
 mv "$OUT/enclave-gateway-mtls.key" "$OUT/enclave-gateway-client.key"
 mv "$OUT/enclave-gateway-mtls-chain.pem" "$OUT/enclave-gateway-client-chain.pem"
 
-# OpenSearch/MinIO/Keycloak convention aliases
-cp "$OUT/opensearch.crt" "$OUT/opensearch.pem" 2>/dev/null || true
+# MinIO convention aliases
 cp "$OUT/minio.crt" "$OUT/public.crt"; cp "$OUT/minio.key" "$OUT/private.key"
 
 chmod 600 "$OUT"/*.key

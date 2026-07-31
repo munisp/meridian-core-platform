@@ -1,18 +1,16 @@
-# CI (manual-move copy)
+# ci/ — dual-path CI mirror (HARDENING H6)
 
-`ci/workflows/ci.yml` is the canonical CI definition for meridian-core-platform
-(HARDENING H6): Go build/vet/test -race per module, pytest per Python service,
-admin frontend npm ci/tsc/build, and `cargo check --locked` for geo-rs.
+`ci/workflows/ci.yml` is a byte-identical copy of `.github/workflows/ci.yml`.
 
-It is stored here because the automation push token may lack the `workflow`
-scope required to create files under `.github/workflows/` via the GitHub API.
+H6 push rule: attempt the push to `.github/workflows/ci.yml` first; if the
+GitHub API rejects it with a workflow-scope error (403/422 — the token lacks
+the `workflow` scope), the workflow lives here instead and a maintainer with
+sufficient scope must move it manually:
 
-**Action required (one-time, by a maintainer with workflow scope):**
-
-```bash
-mkdir -p .github/workflows
-cp ci/workflows/ci.yml .github/workflows/ci.yml
-git add .github/workflows/ci.yml && git commit -m "ci: enable workflow" && git push
+```sh
+mkdir -p .github/workflows && cp ci/workflows/ci.yml .github/workflows/ci.yml
 ```
 
-Keep both copies in sync when editing.
+Pipeline coverage: Go modules (build/vet/test -race), Python services
+(pytest + compile smoke), admin frontend (npm ci, tsc, build), and
+`cargo check --locked` for geo-rs.
