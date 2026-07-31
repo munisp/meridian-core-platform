@@ -38,6 +38,7 @@ type server struct {
 	dev    *tb.DevClient // non-nil only in dev profile (snapshots/hooks)
 	out    outbox.Store
 	dir    string
+	thresh *thresholdTracker // I7: CTR ₦10m / structuring detection
 }
 
 func main() {
@@ -51,20 +52,21 @@ func main() {
 	var dev *tb.DevClient
 	if os.Getenv("TIGERBEETLE_ADDRESSES") != "" {
 		if rc, err := tb.NewRealClientFromEnv(); err != nil {
-			log.Printf("profile=dev component=ledger tigerbeetle connect failed (%v); dev fallback", err)
-			dev = tb.NewDevClient()
-			client = dev
-		} else {
-			log.Printf("profile=prod component=ledger tigerbeetle addresses=%s", os.Getenv("TIGERBEETLE_ADDRESSES"))
-			client = rc
-			defer rc.Close()
+			// FAIL CLOSED (audit: prod selector set but a connect failure
+			// silently downgraded to the in-mem DevClient — the financial
+			// system of record would run on ephemeral dev state). Refuse
+			// to start instead.
+			log.Fatalf("profile=prod component=ledger FATAL: TIGERBEETLE_ADDRESSES set but connect failed (%v); refusing to fall back to the in-mem DevClient", err)
 		}
+		log.Printf("profile=prod component=ledger tigerbeetle addresses=%s", os.Getenv("TIGERBEETLE_ADDRESSES"))
+		client = rc
+		defer rc.Close()
 	} else {
 		log.Printf("profile=dev component=ledger in-mem")
 		dev = tb.NewDevClient()
 		client = dev
 	}
-	srv := &server{client: client, dev: dev, dir: dir}
+	srv := &server{client: client, dev: dev, dir: dir, thresh: newThresholdTracker()}
 
 	if dev != nil {
 		// durable snapshot restore
@@ -143,6 +145,26 @@ func (s *server) emitTransferEvent(t tb.Transfer) {
 	}
 	if err := s.out.Append("nrs.ledger.transfers.v1", env); err != nil {
 		log.Printf("outbox append: %v", err)
+	}
+	// I7: CTR ₦10m threshold + structuring-suspicion hooks (rp-bank-thresholds).
+	s.checkThresholds(t)
+}
+
+// checkThresholds applies the rp-bank-thresholds rules to every transfer
+// and emits nrs.aml.* events through the outbox.
+func (s *server) checkThresholds(t tb.Transfer) {
+	if s.thresh == nil {
+		return
+	}
+	for _, ev := range s.thresh.Observe(t) {
+		env, err := envelope.New(ev.Type, service, "", "", ev.Payload)
+		if err != nil {
+			log.Printf("threshold envelope: %v", err)
+			continue
+		}
+		if err := s.out.Append(ev.Type, env); err != nil {
+			log.Printf("threshold outbox append: %v", err)
+		}
 	}
 }
 
