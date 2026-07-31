@@ -1,0 +1,35 @@
+# [seed] rp-vat-zerorated-basket — zero-rated supplies (Second Schedule, VAT Act).
+# Zero-rated supplies charge 0% output VAT and input VAT REMAINS recoverable.
+id: rp-vat-zerorated-basket
+version: 1.0.0
+effective_from: 2020-02-01
+effective_to: null
+status: published
+subject_to_regazette: true
+provenance:
+  as_passed: "VAT Act Cap V1 LFN 2004 (as amended), Second Schedule, as passed"
+  as_gazetted: null
+  source_citation: "VAT Act, Second Schedule (zero-rated goods and services); Finance Act 2020 amendments"
+signed:
+  algorithm: ed25519
+  key_id: meridian-ceremony-dev-001
+  signature: 3841639f99bd0d67dc16b2cb36422575f7921e1d86a4c056cf8f111d70386e5d5f5dd7b73defbd73860b8be18222fbee825649039825e69c93fb66f463001207
+rules:
+  - id: vat.zero.non-oil-exports
+    when: { category: [non_oil_exports, exported_goods] }
+    then: { decision: zero_rated, rate_bps: 0, narrate: "Zero-rated: non-oil exports" }
+  - id: vat.zero.basic-food
+    when: { category: [basic_food, basic_food_items] }
+    then: { decision: zero_rated, rate_bps: 0, narrate: "Zero-rated: basic food items (Finance Act 2020)" }
+  - id: vat.zero.medical-pharma
+    when: { category: [medical_products, pharmaceuticals] }
+    then: { decision: zero_rated, rate_bps: 0, narrate: "Zero-rated: medical and pharmaceutical products" }
+  - id: vat.zero.educational-books
+    when: { category: [educational_books, educational_materials] }
+    then: { decision: zero_rated, rate_bps: 0, narrate: "Zero-rated: books and educational materials" }
+  - id: vat.zero.plant-machinery-export-processing
+    when: { category: [plant_machinery_export_zone, gas_exploration_inputs] }
+    then: { decision: zero_rated, rate_bps: 0, narrate: "Zero-rated: plant & machinery for export-processing zones / gas utilisation" }
+  - id: vat.zero.commercial-aircraft
+    when: { category: [commercial_aircraft, commercial_aircraft_parts, airline_transportation] }
+    then: { decision: zero_rated, rate_bps: 0, narrate: "Zero-rated: commercial aircraft, spare parts and airline transportation" }

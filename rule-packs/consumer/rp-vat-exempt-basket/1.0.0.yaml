@@ -1,0 +1,35 @@
+# [seed] rp-vat-exempt-basket — VAT-exempt supplies (First Schedule, VAT Act).
+# Exempt supplies carry NO output VAT and input VAT is not recoverable.
+id: rp-vat-exempt-basket
+version: 1.0.0
+effective_from: 2020-02-01
+effective_to: null
+status: published
+subject_to_regazette: true
+provenance:
+  as_passed: "VAT Act Cap V1 LFN 2004 (as amended), First Schedule, as passed"
+  as_gazetted: null
+  source_citation: "VAT Act, First Schedule (exempt goods and services); Finance Act 2020/2021 amendments"
+signed:
+  algorithm: ed25519
+  key_id: meridian-ceremony-dev-001
+  signature: 3243897d528dcd2f5c4ff6f8c8ff95d53b21d2ad46c23d5dc78a546c5b28eb1a57819991d422749213508becab12b8a0741a81e0b88833c6b9d93398f40b5105
+rules:
+  - id: vat.exempt.medical-services
+    when: { category: [medical_services, healthcare_services] }
+    then: { decision: exempt, rate_bps: 0, narrate: "VAT exempt: medical and health care services" }
+  - id: vat.exempt.education-services
+    when: { category: [education_services, tuition] }
+    then: { decision: exempt, rate_bps: 0, narrate: "VAT exempt: educational services / tuition" }
+  - id: vat.exempt.exported-services
+    when: { category: exported_services }
+    then: { decision: exempt, rate_bps: 0, narrate: "VAT exempt: exported services" }
+  - id: vat.exempt.plays-performances
+    when: { category: [cultural_performances, school_plays] }
+    then: { decision: exempt, rate_bps: 0, narrate: "VAT exempt: plays and performances conducted by educational institutions" }
+  - id: vat.exempt.real-estate-land
+    when: { category: [land_sale, real_estate_lease] }
+    then: { decision: exempt, rate_bps: 0, narrate: "VAT exempt: sale/lease of land and residential accommodation" }
+  - id: vat.exempt.financial-securities
+    when: { category: [money_securities, shares_stocks] }
+    then: { decision: exempt, rate_bps: 0, narrate: "VAT exempt: money, securities and shares transactions" }
