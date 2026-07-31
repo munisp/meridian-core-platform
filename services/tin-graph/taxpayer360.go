@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"github.com/munisp/meridian-core-platform/services/tin-graph/internal/graph"
 )
@@ -84,6 +85,18 @@ func downstreamSection(envVar, url, authz, note string) section360 {
 
 func (s *server) taxpayer360Handler(w http.ResponseWriter, r *http.Request) {
 	tinHash := r.PathValue("tin_hash")
+	// Object-level authz (audit M-3): the full taxpayer 360 view is PII.
+	// nrs:officer/admin may read any record; any other caller may read only
+	// their own record — identified by the tin_hash matching their tenant_id
+	// or sub claim.
+	if !canAdministerTIN(r) {
+		claims, _ := auth.FromContext(r.Context())
+		if tinHash != claims.TenantID && tinHash != claims.Sub {
+			httpx.Errorf(w, http.StatusForbidden, "forbidden",
+				"callers may only read their own taxpayer360 record (role nrs:officer or admin required for others)")
+			return
+		}
+	}
 	authz := r.Header.Get("Authorization")
 	out := taxpayer360{
 		TINHash: tinHash,
