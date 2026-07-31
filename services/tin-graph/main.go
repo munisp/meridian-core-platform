@@ -123,6 +123,16 @@ func main() {
 	}
 	s := &server{st: st, cfg: loadMatchConfig(), nin: nin, cac: cac}
 
+	mux := s.routes()
+	addr := ":" + httpx.Port("8003")
+	log.Printf("%s %s (thresholds auto=%.2f review=%.2f)", service, version, s.cfg.AutoMatchThreshold, s.cfg.ReviewThreshold)
+	log.Fatal(httpx.ListenAndServe(addr, auth.Middleware(mux)))
+}
+
+// routes registers the HTTP API. Authz (audit M-3): POST /v1/tin/provision
+// and GET /v1/taxpayer360/{tin_hash} are object/role-scoped inside their
+// handlers (nrs:officer/admin, or own-record reads for taxpayer360).
+func (s *server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	httpx.RegisterStandard(mux, service, version, nil)
 	mux.HandleFunc("POST /v1/tin/provision", s.provision)
@@ -137,10 +147,7 @@ func main() {
 	mux.HandleFunc("GET /v1/config/match-thresholds", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, s.cfg)
 	})
-
-	addr := ":" + httpx.Port("8003")
-	log.Printf("%s %s (thresholds auto=%.2f review=%.2f)", service, version, s.cfg.AutoMatchThreshold, s.cfg.ReviewThreshold)
-	log.Fatal(httpx.ListenAndServe(addr, auth.Middleware(mux)))
+	return mux
 }
 
 func (s *server) allEntities() []graph.Entity {
@@ -164,7 +171,21 @@ type provisionReq struct {
 	Company *graph.CompanyProfile `json:"company,omitempty"`
 }
 
+// canAdministerTIN reports whether the caller may provision identities or
+// read arbitrary taxpayer records (audit M-3): requires the nrs:officer or
+// admin role. Regular taxpayers may only read their OWN record (enforced
+// per-request in taxpayer360Handler).
+func canAdministerTIN(r *http.Request) bool {
+	claims, ok := auth.FromContext(r.Context())
+	return ok && (claims.HasRole("nrs:officer") || claims.HasRole("admin"))
+}
+
 func (s *server) provision(w http.ResponseWriter, r *http.Request) {
+	// identity provisioning is privileged (audit M-3)
+	if !canAdministerTIN(r) {
+		httpx.Errorf(w, http.StatusForbidden, "forbidden", "role nrs:officer or admin required to provision TINs")
+		return
+	}
 	var req provisionReq
 	if err := httpx.Decode(r, &req); err != nil {
 		httpx.BadRequest(w, "invalid JSON: %v", err)
