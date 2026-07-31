@@ -1,0 +1,29 @@
+# CI for ml/ — H6 fallback location.
+# NOTE: push of .github/workflows/* is rejected without the `workflow` OAuth
+# scope in this environment, so this file lives at ci/workflows/ml.yml.
+# MANUAL STEP: move to .github/workflows/ml.yml (same content) to activate.
+name: ml
+
+on:
+  push:
+    paths: ["ml/**"]
+  pull_request:
+    paths: ["ml/**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies (CPU torch)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install numpy scikit-learn pyarrow duckdb "psycopg[binary]" \
+            fastapi uvicorn pydantic pyyaml httpx pytest kafka-python
+      - name: Run ml tests
+        working-directory: ml
+        run: python -m pytest tests/ -q

@@ -1,0 +1,107 @@
+{
+  "credit_score": {
+    "active": "v1",
+    "versions": {
+      "v1": {
+        "data_window": "2024-01-01..2024-04-29",
+        "metrics": {
+          "auc": 0.9922821081357667,
+          "default_rate": 0.624666690826416,
+          "pr_auc": 0.9953947296556773
+        },
+        "path": "weights/credit_score_v1.pt.b64",
+        "trained_at": "2026-07-30T23:48:34.563999+00:00"
+      }
+    }
+  },
+  "fraud_autoencoder": {
+    "active": "v1",
+    "versions": {
+      "v1": {
+        "data_window": "2024-01-01..2024-04-29",
+        "metrics": {
+          "anomaly_separation": 7.8347086906433105,
+          "auc": 0.9748773162890614,
+          "pr_auc": 0.839588981695179,
+          "recall_at_5pct": 0.8286852589641435
+        },
+        "path": "weights/fraud_autoencoder_v1.pt.b64",
+        "trained_at": "2026-07-30T23:48:34.381404+00:00"
+      }
+    }
+  },
+  "fraud_mlp": {
+    "active": "v1",
+    "versions": {
+      "v1": {
+        "data_window": "2024-01-01..2024-04-29",
+        "metrics": {
+          "auc": 0.9996271024690812,
+          "pr_auc": 0.9890825939280592,
+          "recall_at_5pct": 1.0
+        },
+        "path": "weights/fraud_mlp_v1.pt.b64",
+        "trained_at": "2026-07-30T23:48:32.657128+00:00"
+      }
+    }
+  },
+  "fraudfusion": {
+    "active": "v1",
+    "versions": {
+      "v1": {
+        "data_window": "2024-01-01..2024-04-29",
+        "metrics": {
+          "auc": 0.9995274938210188,
+          "pr_auc": 0.9798708345797462,
+          "recall_at_5pct": 1.0,
+          "single_stream_aucs": {
+            "ae": 0.972133704716512,
+            "gnn": 0.5996334091356085,
+            "mlp": 0.9996271024690812,
+            "rules": 0.919437061584387
+          },
+          "uplift_vs_best_single": -9.960864806235481e-05,
+          "weights": {
+            "ae": 0.0019931471906602383,
+            "gnn": 0.0022795863915234804,
+            "mlp": 0.8215771913528442,
+            "rules": 0.17415010929107666
+          }
+        },
+        "path": "weights/fraudfusion_v1.pt.b64",
+        "trained_at": "2026-07-30T23:48:36.646442+00:00"
+      }
+    }
+  },
+  "gnn_gcn": {
+    "active": "v1",
+    "versions": {
+      "v1": {
+        "data_window": "graph",
+        "metrics": {
+          "auc": 0.8608444187391555,
+          "n_ring_nodes_test": 19,
+          "ring_precision": 0.2857142857142857,
+          "ring_recall": 0.42105263157894735,
+          "threshold": 0.7999999999999999
+        },
+        "path": "weights/gnn_gcn_v1.pt.b64",
+        "trained_at": "2026-07-30T23:48:36.134214+00:00"
+      }
+    }
+  },
+  "mcmc": {
+    "active": "v1",
+    "versions": {
+      "v1": {
+        "data_window": "2024-01-01..2024-04-29",
+        "metrics": {
+          "acceptance_fraud_rate": 0.6718888888888889,
+          "fraud_rate_mean": 0.03446889580755877
+        },
+        "path": "weights/mcmc_v1.pt.b64",
+        "trained_at": "2026-07-30T23:48:37.111731+00:00"
+      }
+    }
+  }
+}
