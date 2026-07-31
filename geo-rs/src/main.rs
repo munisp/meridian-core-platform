@@ -246,3 +246,50 @@ async fn main() {
     println!("geo-rs listening on :{port}");
     axum::serve(listener, app).await.expect("serve");
 }
+
+// ---------------------------------------------------------------------------
+// Smoke tests (pure functions, no network). Run: cargo test
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unit_square() -> Vec<(f64, f64)> {
+        vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]
+    }
+
+    #[test]
+    fn pip_inside_outside_square() {
+        let ring = unit_square();
+        assert!(point_in_polygon(5.0, 5.0, &ring), "centre must be inside");
+        assert!(point_in_polygon(0.5, 9.5, &ring), "near-corner inside");
+        assert!(!point_in_polygon(15.0, 5.0, &ring), "east outside");
+        assert!(!point_in_polygon(5.0, -1.0, &ring), "south outside");
+        assert!(!point_in_polygon(-0.1, 5.0, &ring), "west outside");
+    }
+
+    #[test]
+    fn pip_degenerate_rings() {
+        assert!(!point_in_polygon(0.0, 0.0, &[]), "empty ring");
+        assert!(!point_in_polygon(0.0, 0.0, &[(1.0, 1.0), (2.0, 2.0)]), "<3 vertices");
+    }
+
+    #[test]
+    fn pip_concave_polygon() {
+        // L-shaped concave ring: the notch at (7.5, 7.5) is OUTSIDE.
+        let ring = vec![
+            (0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (5.0, 5.0),
+            (5.0, 10.0), (0.0, 10.0), (0.0, 0.0),
+        ];
+        assert!(point_in_polygon(2.5, 7.5, &ring), "upper leg inside");
+        assert!(!point_in_polygon(7.5, 7.5, &ring), "concave notch outside");
+    }
+
+    #[test]
+    fn haversine_known_distance() {
+        // Lagos (3.3792, 6.5244) -> Abuja (7.4951, 9.0579) ≈ 540 km.
+        let d = haversine_km(3.3792, 6.5244, 7.4951, 9.0579);
+        assert!((d - 540.0).abs() < 20.0, "distance {d} not ≈ 540km");
+        assert_eq!(haversine_km(1.0, 1.0, 1.0, 1.0), 0.0, "same point = 0");
+    }
+}

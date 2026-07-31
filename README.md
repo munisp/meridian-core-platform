@@ -121,6 +121,13 @@ zero config. If a prod var is unset/empty the service logs
 `profile=prod component=<name>` and connects to the real system. Startup never
 fails because a prod var is missing.
 
+**Fail-closed exceptions (hardening, feature/core-hardening):** in prod profile
+the services REFUSE to start/degrade rather than fall back silently —
+`TIGERBEETLE_ADDRESSES` set but unreachable (ledger refuses to start),
+`AUTH_MODE=keycloak` with a misconfigured verifier (all requests denied 503),
+and missing dedicated keys when `PROFILE=prod`: `TAT_SEAL_KEY` (audit-evidence),
+`TIN_HMAC_KEY` (tin-graph), `CONSENT_RECEIPT_KEY` (consent).
+
 | Var | Purpose | Default (dev) |
 |---|---|---|
 | AUTH_MODE | `dev` (HS256 + X-Dev-Role) or `keycloak` (RS256 via JWKS) | dev |
@@ -148,3 +155,15 @@ workers), `services/ledger/internal/tb/real.go` (tigerbeetle-go),
 `services/search-indexer` (OpenSearch bulk), `services/audit-evidence`
 (MinIO WORM), and the Python mirror in `packages/events/python/meridian_events`
 (auth.py, store.py).
+
+## Hardening innovations (feature/core-hardening)
+
+| ID | What | Where | Tag |
+|----|------|-------|-----|
+| I1 | Taxpayer 360° graph profile API aggregating identity, filings summary, ledger posture, graph neighbourhood and ML risk scores into one response (per-section `status`; downstream sections are `unavailable` when not configured, never simulated) | `GET /v1/taxpayer360/{tin_hash}` in `services/tin-graph` | REAL |
+| I2 | Smart audit-case auto-bundling: GNN ring detections merge (union-find over shared members) into one bundled audit case with shared-evidence references | `POST /v1/audit/bundle` in `ml/serving` | REAL |
+| I3 | Refund fast-track lane: credit score + compliance history -> auto-approve lane with rule caps (amount thresholds) and manual-review fallback events (`nrs.refund.manual_review.v1`) | `POST /v1/refunds/fasttrack` in `services/settlement` | REAL |
+| I4 | Notification fallback orchestrator: provider chain sms->ussd->email->agent with delivery receipts, retry/backoff, per-channel templates; terminal agent queue is a real handoff, not simulated delivery | `POST /v1/notify`, `GET /v1/receipts/{id}` in `services/notification` | REAL |
+| I5 | Real-time revenue event stream: `nrs.revenue.settled.v1` dashboard documents from settlement 3-way matches plus an aggregation endpoint | `GET /v1/revenue/events`, `GET /v1/revenue/aggregate` in `services/settlement` | REAL |
+| I6 | Behaviour change-point detection: dependency-free CUSUM + BOCPD-lite over per-taxpayer filing streams emitting `nrs.ml.changepoint.v1` alerts | `POST /v1/monitoring/changepoint` in `ml/serving` (`ml/monitoring/changepoint.py`) | REAL |
+| I7 | CTR ₦10m bank-threshold check: `rp-bank-thresholds` pack + ledger transfer hook emitting `nrs.aml.ctr.v1` / `nrs.aml.structuring.v1` / `nrs.aml.threshold_review.v1` on sub-threshold splitting patterns | `services/ledger/thresholds.go`, `rule-packs/consumer/rp-bank-thresholds` | REAL |
