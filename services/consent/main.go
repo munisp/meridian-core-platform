@@ -140,6 +140,10 @@ func main() {
 	mux.HandleFunc("GET /v1/privacy/breaches", requireAnyRole(s.breachList, "privacy:officer", "admin"))
 	mux.HandleFunc("GET /v1/privacy/breaches/{id}", requireAnyRole(s.breachGet, "privacy:officer", "admin"))
 	mux.HandleFunc("POST /v1/privacy/breaches/{id}/transition", requireAnyRole(s.breachTransition, "privacy:officer", "admin"))
+	// C3: data subject rights (export / erasure / access log)
+	mux.HandleFunc("GET /v1/dsr/{subject}/export", s.dsrExport)
+	mux.HandleFunc("POST /v1/dsr/{subject}/erasure", s.dsrErasure)
+	mux.HandleFunc("GET /v1/dsr/{subject}/access-log", s.dsrAccessLog)
 
 	addr := ":" + httpx.Port("8007")
 	log.Printf("%s %s", service, version)
