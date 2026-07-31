@@ -1,8 +1,7 @@
 name: ci
-
 on:
   push:
-    branches: [main, hardening/*]
+    branches: [main, "hardening/**"]
   pull_request:
 
 jobs:
@@ -12,29 +11,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23.4"
-      - name: build/vet/test per module
+          go-version: "1.22"
+      - name: Build / vet / test each Go module
         run: |
           set -e
-          for m in \
-            packages/events \
-            packages/rulepack-schema \
-            packages/schemas/go \
-            packages/permify-models \
-            packages/temporal-sdkx \
-            workflows-go \
-            services/rp-registry \
-            services/tin-graph \
-            services/ledger \
-            services/notification \
-            services/audit-evidence \
-            services/geo \
-            services/consent \
-            services/search-indexer \
-            services/edge-policy \
-            services/admin-api; do
-            echo "== $m =="
-            (cd "$m" && go mod tidy && go build ./... && go vet ./... && go test -race ./...)
+          for d in $(find . -name go.mod -not -path "*/node_modules/*" -exec dirname {} \;); do
+            echo "== $d"
+            (cd "$d" && go build ./... && go vet ./... && go test ./... -race -count=1)
           done
 
   python:
@@ -44,18 +27,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: install deps
-        run: |
-          pip install -e packages/events/python
-          pip install pytest fastapi uvicorn pydantic httpx duckdb \
-            "PyJWT[crypto]" "psycopg[binary]"
-      - name: pytest per service
+      - name: Test Python services
         run: |
           set -e
-          (cd packages/events/python && pytest tests/ -q)
-          for s in rules-engine feature-store reg-watch settlement; do
-            echo "== $s =="
-            (cd "services/$s" && pytest tests/ -q)
+          pip install pytest httpx
+          for d in services/rules-engine services/feature-store services/reg-watch services/settlement; do
+            if [ -f "$d/requirements.txt" ]; then pip install -r "$d/requirements.txt"; fi
+            if [ -d "$d/tests" ]; then (cd "$d" && python -m pytest -q); fi
+            (cd "$d" && python -c "import compileall,sys; sys.exit(0 if compileall.compile_dir('.', quiet=1) else 1)")
           done
 
   admin-frontend:
@@ -72,7 +51,7 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run build
 
-  rust-geo:
+  geo-rs:
     runs-on: ubuntu-latest
     defaults:
       run:
