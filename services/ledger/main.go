@@ -95,21 +95,29 @@ func main() {
 	relay := outbox.Relay{Store: ob, Bus: b, Dir: filepath.Join(dir, "outbox")}
 	go relay.Run(ctx)
 
-	mux := http.NewServeMux()
-	httpx.RegisterStandard(mux, service, version, nil)
-	mux.HandleFunc("POST /v1/accounts", srv.createAccounts)
-	mux.HandleFunc("GET /v1/accounts", srv.listAccounts)
-	mux.HandleFunc("GET /v1/accounts/{id}/balance", srv.getBalance)
-	mux.HandleFunc("POST /v1/transfers", srv.createTransfer)
-	mux.HandleFunc("POST /v1/transfers/pending", srv.createPending)
-	mux.HandleFunc("POST /v1/transfers/{id}/post", srv.postPending)
-	mux.HandleFunc("POST /v1/transfers/{id}/void", srv.voidPending)
-	mux.HandleFunc("GET /v1/transfers", srv.listTransfers)
-
-	handler := auth.Middleware(mux)
+	handler := auth.Middleware(srv.routes())
 	addr := ":" + httpx.Port("8010")
 	log.Printf("%s %s (DATA_DIR=%s, EVENT_BUS=%s)", service, version, dir, httpx.Env("EVENT_BUS", "inproc"))
 	log.Fatal(httpx.ListenAndServe(addr, handler))
+}
+
+// routes registers the HTTP API. Security (audit H-4): money-movement
+// endpoints require explicit roles from the token claims — "ledger:admin"
+// for account creation and "ledger:post" for transfer create/post/void.
+// Authentication alone (any role, e.g. read-only auditor) is NOT enough:
+// RequireRole answers 403 (RFC7807) for under-privileged callers.
+func (s *server) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	httpx.RegisterStandard(mux, service, version, nil)
+	mux.HandleFunc("POST /v1/accounts", auth.RequireRole("ledger:admin", s.createAccounts))
+	mux.HandleFunc("GET /v1/accounts", s.listAccounts)
+	mux.HandleFunc("GET /v1/accounts/{id}/balance", s.getBalance)
+	mux.HandleFunc("POST /v1/transfers", auth.RequireRole("ledger:post", s.createTransfer))
+	mux.HandleFunc("POST /v1/transfers/pending", auth.RequireRole("ledger:post", s.createPending))
+	mux.HandleFunc("POST /v1/transfers/{id}/post", auth.RequireRole("ledger:post", s.postPending))
+	mux.HandleFunc("POST /v1/transfers/{id}/void", auth.RequireRole("ledger:post", s.voidPending))
+	mux.HandleFunc("GET /v1/transfers", s.listTransfers)
+	return mux
 }
 
 func (s *server) persist() {
