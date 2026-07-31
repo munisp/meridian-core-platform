@@ -61,16 +61,16 @@ export default function Settings() {
   return (
     <div>
       <PageHeader title="Settings" sub="Edge policy & WAF mode, notification providers, feature flags and API keys." />
-      {msg && <div className="mb-4 rounded-lg bg-moss-50 border border-moss-200 px-4 py-2.5 text-sm text-moss-800">{msg}</div>}
+      {msg && <div role="status" className="mb-4 rounded-lg bg-success border border-brand-200 px-4 py-2.5 text-sm text-success-on">{msg}</div>}
 
       <div className="grid lg:grid-cols-2 gap-6">
         <section className="card p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-sand-900">Edge policy — route table (APISIX)</h2>
+            <h2 className="text-sm font-semibold text-stone-900">Edge policy — route table (APISIX)</h2>
             <DevSeedTag source={routeSource} />
           </div>
           <table className="w-full mb-5">
-            <thead><tr><th className="th">Plane</th><th className="th">Path</th><th className="th">Upstream</th><th className="th">Auth</th></tr></thead>
+            <thead><tr><th scope="col" className="th">Plane</th><th scope="col" className="th">Path</th><th scope="col" className="th">Upstream</th><th scope="col" className="th">Auth</th></tr></thead>
             <tbody>
               {routes.map((r, i) => (
                 <tr key={i}>
@@ -82,7 +82,7 @@ export default function Settings() {
               ))}
             </tbody>
           </table>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-sand-500 mb-2">WAF mode</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-stone-600 mb-2">WAF mode</h3>
           <div className="flex gap-2">
             {['detect', 'enforce'].map((m) => (
               <button key={m} onClick={() => setWAF(m)}
@@ -90,14 +90,14 @@ export default function Settings() {
                 {m}
               </button>
             ))}
-            <span className="self-center text-xs text-sand-500">current: <span className="font-mono">{waf}</span></span>
+            <span className="self-center text-xs text-stone-600">current: <span className="font-mono">{waf}</span></span>
           </div>
         </section>
 
         <section className="card p-5">
-          <h2 className="text-sm font-semibold text-sand-900 mb-4">Notification providers</h2>
+          <h2 className="text-sm font-semibold text-stone-900 mb-4">Notification providers</h2>
           <table className="w-full">
-            <thead><tr><th className="th">Channel</th><th className="th">Provider</th><th className="th">Mode</th><th className="th">Status</th></tr></thead>
+            <thead><tr><th scope="col" className="th">Channel</th><th scope="col" className="th">Provider</th><th scope="col" className="th">Mode</th><th scope="col" className="th">Status</th></tr></thead>
             <tbody>
               {providers.map((p) => (
                 <tr key={p.channel}>
@@ -109,18 +109,20 @@ export default function Settings() {
               ))}
             </tbody>
           </table>
-          <p className="mt-3 text-xs text-sand-400">All providers run behind interfaces with log simulators in dev (honesty tag: no real SMS/email is sent).</p>
+          <p className="mt-3 text-xs text-stone-600">All providers run behind interfaces with log simulators in dev (honesty tag: no real SMS/email is sent).</p>
         </section>
 
         <section className="card p-5">
-          <h2 className="text-sm font-semibold text-sand-900 mb-4">Feature flags</h2>
+          <h2 className="text-sm font-semibold text-stone-900 mb-4">Feature flags</h2>
           <div className="space-y-2.5">
             {Object.entries(flags).map(([k, v]) => (
               <div key={k} className="flex items-center justify-between">
-                <span className="font-mono text-xs text-sand-700">{k}</span>
+                <span className="font-mono text-xs text-stone-700">{k}</span>
                 <button
+                  role="switch"
+                  aria-checked={v}
                   onClick={() => toggleFlag(k)}
-                  className={`relative h-6 w-11 rounded-full transition-colors ${v ? 'bg-moss-500' : 'bg-sand-300'}`}
+                  className={`relative h-6 w-11 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-700 focus-visible:ring-offset-2 ${v ? 'bg-brand-700' : 'bg-neutral-300'}`}
                   aria-label={`toggle ${k}`}
                 >
                   <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${v ? 'left-[22px]' : 'left-0.5'}`} />
@@ -131,18 +133,19 @@ export default function Settings() {
         </section>
 
         <section className="card p-5">
-          <h2 className="text-sm font-semibold text-sand-900 mb-4">API keys</h2>
+          <h2 className="text-sm font-semibold text-stone-900 mb-4">API keys</h2>
           <form onSubmit={createKey} className="mb-4 flex gap-2">
-            <input className="input" placeholder="key name e.g. ci ceremony bot" value={keyName} onChange={(e) => setKeyName(e.target.value)} required />
+            <label htmlFor="api-key-name" className="sr-only">Key name</label>
+            <input id="api-key-name" className="input" placeholder="key name e.g. ci ceremony bot" value={keyName} onChange={(e) => setKeyName(e.target.value)} required />
             <button className="btn-primary shrink-0">Create</button>
           </form>
           {secretOnce && (
-            <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs font-mono text-amber-900 break-all">
+            <div className="mb-4 rounded-lg bg-warning border border-warning-strong px-3 py-2 text-xs font-mono text-warning-on break-all">
               {secretOnce} — shown once, store it now.
             </div>
           )}
           <table className="w-full">
-            <thead><tr><th className="th">Name</th><th className="th">Prefix</th><th className="th">Scopes</th><th className="th">Created</th><th className="th"></th></tr></thead>
+            <thead><tr><th scope="col" className="th">Name</th><th scope="col" className="th">Prefix</th><th scope="col" className="th">Scopes</th><th scope="col" className="th">Created</th><th scope="col" className="th"></th></tr></thead>
             <tbody>
               {keys.map((k) => (
                 <tr key={k.id} className={k.revoked ? 'opacity-50' : ''}>
