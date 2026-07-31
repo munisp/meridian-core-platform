@@ -1,0 +1,63 @@
+{
+  "policy": {
+    "description": "audit-* ISM (SPEC B section 3): rollover at 50GB, snapshot to MinIO, delete after 7y (retention law). Indices audit-YYYY.MM, 12 shards x 1 replica.",
+    "default_state": "hot",
+    "states": [
+      {
+        "name": "hot",
+        "actions": [
+          {
+            "rollover": {
+              "min_size": "50gb",
+              "min_index_age": "30d"
+            }
+          }
+        ],
+        "transitions": [
+          {
+            "state_name": "snapshot",
+            "conditions": { "min_rollover_age": "1d" }
+          }
+        ]
+      },
+      {
+        "name": "snapshot",
+        "actions": [
+          {
+            "snapshot": {
+              "repository": "minio-os-snapshots",
+              "snapshot": "audit-{{ctx.index}}"
+            }
+          }
+        ],
+        "transitions": [
+          {
+            "state_name": "warm",
+            "conditions": { "min_index_age": "90d" }
+          }
+        ]
+      },
+      {
+        "name": "warm",
+        "actions": [
+          { "replica_count": { "number_of_replicas": 1 } },
+          { "force_merge": { "max_num_segments": 1 } }
+        ],
+        "transitions": [
+          {
+            "state_name": "delete",
+            "conditions": { "min_index_age": "2555d" }
+          }
+        ]
+      },
+      {
+        "name": "delete",
+        "actions": [ { "delete": {} } ]
+      }
+    ],
+    "ism_template": {
+      "index_patterns": ["audit-*"],
+      "priority": 100
+    }
+  }
+}
