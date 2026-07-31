@@ -216,6 +216,43 @@ def revenue_aggregate(group_by: str = "tax_type",
             "total_events": len(docs)}
 
 
+# ---------------------------------------------------------------------------
+# I3: refund fast-track lane
+# ---------------------------------------------------------------------------
+
+class FastTrackRequest(BaseModel):
+    tin_hash: str
+    amount_kobo: int
+    credit_score: int = Field(ge=0, le=1000)
+    filings_on_time: int = Field(default=0, ge=0)
+    filings_total: int = Field(default=0, ge=0)
+    prior_breaks: int = Field(default=0, ge=0)
+    tax_type: str | None = None
+
+
+@app.post("/v1/refunds/fasttrack")
+def refund_fasttrack(req: FastTrackRequest,
+                     claims: Claims = Depends(fastapi_dependency())) -> dict:
+    """I3 (REAL): decide the refund lane from credit score + compliance
+    history with rule caps; manual-review lane emits a fallback event."""
+    from .refund import decide_refund_lane
+
+    try:
+        doc = decide_refund_lane(
+            tin_hash=req.tin_hash, amount_kobo=req.amount_kobo,
+            credit_score=req.credit_score, filings_on_time=req.filings_on_time,
+            filings_total=req.filings_total, prior_breaks=req.prior_breaks,
+            tax_type=req.tax_type)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _store.put("refund_decisions", f"{doc['decided_at']}:{req.tin_hash}", doc)
+    if doc["lane"] == "manual_review":
+        event = {"type": "nrs.refund.manual_review.v1", "decision": doc,
+                 "queued_at": doc["decided_at"]}
+        _store.put("refund_manual_review", f"{doc['decided_at']}:{req.tin_hash}", event)
+    return doc
+
+
 @app.get("/v1/recon/breaks")
 def list_breaks(status: str | None = None,
                 claims: Claims = Depends(fastapi_dependency())) -> dict:
