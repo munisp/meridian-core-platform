@@ -122,6 +122,11 @@ type Transfer struct {
 	Resolved        bool   `json:"resolved,omitempty"` // pending transfer posted/voided
 	UserData        string `json:"user_data,omitempty"`
 	CreatedAt       string `json:"created_at"`
+	// TimeoutSeconds bounds how long a pending transfer may stay unresolved
+	// (TigerBeetle pending timeout). 0 = no expiry. The sweeper voids
+	// unresolved pendings whose ExpiresAt has passed.
+	TimeoutSeconds uint32 `json:"timeout_seconds,omitempty"`
+	ExpiresAt      string `json:"expires_at,omitempty"` // RFC3339Nano, set on pending creation
 }
 
 // ResultCode mirrors TigerBeetle result codes (representative subset).
@@ -381,6 +386,9 @@ func (c *DevClient) PendingTransfer(t Transfer) (Result, error) {
 	cr.CreditsPending += t.Amount
 	t.CreatedAt = now()
 	t.Pending = true
+	if t.TimeoutSeconds > 0 {
+		t.ExpiresAt = time.Now().UTC().Add(time.Duration(t.TimeoutSeconds) * time.Second).Format(time.RFC3339Nano)
+	}
 	cp := t
 	c.transfers[t.ID] = &cp
 	c.changedLocked()
@@ -394,10 +402,10 @@ func (c *DevClient) PostPending(pendingID ID, amount uint64, code uint16) (Resul
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	pt, ok := c.transfers[pendingID]
-	if !ok || !pt.Pending {
+	if !ok {
 		return Result{Code: PendingTransferNotFound}, nil
 	}
-	if pt.Resolved {
+	if !pt.Pending || pt.Resolved {
 		return Result{Code: PendingTransferNotPending}, nil
 	}
 	if amount == 0 {
@@ -447,10 +455,10 @@ func (c *DevClient) VoidPending(pendingID ID, code uint16) (Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	pt, ok := c.transfers[pendingID]
-	if !ok || !pt.Pending {
+	if !ok {
 		return Result{Code: PendingTransferNotFound}, nil
 	}
-	if pt.Resolved {
+	if !pt.Pending || pt.Resolved {
 		return Result{Code: PendingTransferNotPending}, nil
 	}
 	dr := c.accounts[pt.DebitAccountID]
@@ -466,6 +474,43 @@ func (c *DevClient) VoidPending(pendingID ID, code uint16) (Result, error) {
 	c.changedLocked()
 	c.eventLocked(voided)
 	return Result{Code: OK}, nil
+}
+
+// ExpirePendings voids every unresolved pending transfer whose ExpiresAt is
+// at/before t (audit cross-cutting: stale pendings were permanent holds).
+// Returns the voided transfers so the caller can emit expiry events.
+func (c *DevClient) ExpirePendings(t time.Time) []Transfer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var expired []Transfer
+	for _, pt := range c.transfers {
+		if !pt.Pending || pt.Resolved || pt.ExpiresAt == "" {
+			continue
+		}
+		exp, err := time.Parse(time.RFC3339Nano, pt.ExpiresAt)
+		if err != nil || exp.After(t) {
+			continue
+		}
+		dr := c.accounts[pt.DebitAccountID]
+		cr := c.accounts[pt.CreditAccountID]
+		dr.DebitsPending -= pt.Amount
+		cr.CreditsPending -= pt.Amount
+		pt.Resolved = true
+		voided := *pt
+		voided.Code = CodeVoid
+		voided.Pending = false
+		voided.CreatedAt = now()
+		c.transfers[pt.ID] = &voided
+		expired = append(expired, voided)
+	}
+	if len(expired) > 0 {
+		sort.Slice(expired, func(i, j int) bool { return expired[i].ID.String() < expired[j].ID.String() })
+		c.changedLocked()
+		for _, v := range expired {
+			c.eventLocked(v)
+		}
+	}
+	return expired
 }
 
 func sameAttrs(a, b Transfer) bool {
