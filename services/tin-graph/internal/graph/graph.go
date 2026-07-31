@@ -36,7 +36,14 @@ type Entity struct {
 	Email      string            `json:"email,omitempty"`
 	Address    string            `json:"address,omitempty"`
 	Attrs      map[string]string `json:"attrs,omitempty"`
-	CreatedAt  string            `json:"created_at"`
+	// KYB (company entities): directors, declared shareholders and derived
+	// UBOs (>25%%). RegistryCrossCheck records which CAC adapter produced
+	// the profile (stays sim-tagged in dev).
+	Directors          []Director    `json:"directors,omitempty"`
+	Shareholders       []Shareholder `json:"shareholders,omitempty"`
+	UBOs               []UBO         `json:"ubos,omitempty"`
+	RegistryCrossCheck string        `json:"registry_cross_check,omitempty"`
+	CreatedAt          string        `json:"created_at"`
 }
 
 // TINHMACKey from env (SPEC 1.3). A5 hardening: PROFILE=prod REQUIRES a

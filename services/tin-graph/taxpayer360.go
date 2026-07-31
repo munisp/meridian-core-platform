@@ -32,15 +32,15 @@ type section360 struct {
 }
 
 type taxpayer360 struct {
-	TINHash    string              `json:"tin_hash"`
-	EntityID   string              `json:"entity_id,omitempty"`
-	Tag        string              `json:"tag"` // REAL sections are marked per-section; no SIMULATED data
-	At         string              `json:"at"`
-	Identity   section360          `json:"identity"`
-	Filings    section360          `json:"filings_summary"`
-	Ledger     section360          `json:"ledger_posture"`
-	Graph      section360          `json:"graph_neighborhood"`
-	RiskScores section360          `json:"risk_scores"`
+	TINHash    string     `json:"tin_hash"`
+	EntityID   string     `json:"entity_id,omitempty"`
+	Tag        string     `json:"tag"` // REAL sections are marked per-section; no SIMULATED data
+	At         string     `json:"at"`
+	Identity   section360 `json:"identity"`
+	Filings    section360 `json:"filings_summary"`
+	Ledger     section360 `json:"ledger_posture"`
+	Graph      section360 `json:"graph_neighborhood"`
+	RiskScores section360 `json:"risk_scores"`
 }
 
 var downstreamClient = &http.Client{Timeout: 3 * time.Second}

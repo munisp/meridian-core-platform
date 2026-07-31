@@ -1,0 +1,566 @@
+openapi: 3.1.0
+info:
+  title: Meridian Onboarding API
+  version: 1.1.0
+  description: |
+    Informal-sector operator onboarding (meridian-inclusion-suite/services/onboarding):
+    NIMC identity verification, TIN provisioning via core tin-graph, NDPA consent,
+    offline-first capture ingest, durable wf-onb-* workflows, agent registry,
+    document upload (WORM) and lifecycle state machine.
+servers:
+  - url: http://localhost:8101
+tags: [operators, verification, capture, workflows, agents, documents, review]
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      security: []
+      responses:
+        '200': { description: OK }
+  /v1/operators:
+    post:
+      summary: Register an operator
+      tags: [operators]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OperatorCreate' }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/Operator' } } }
+        '409': { description: Duplicate NIN (operator_id in detail) }
+        '422': { description: agent_id rejected (unknown / unvetted in prod) }
+    get:
+      summary: List operators
+      tags: [operators]
+      responses:
+        '200':
+          description: Operators
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  operators: { type: array, items: { $ref: '#/components/schemas/Operator' } }
+                  count: { type: integer }
+  /v1/operators/{id}:
+    get:
+      summary: Get an operator
+      tags: [operators]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Operator' } } } }
+        '404': { description: Not found }
+    patch:
+      summary: Update mutable fields; status changes are validated against the lifecycle state machine
+      tags: [operators]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name: { type: string }
+                phone: { type: string }
+                state: { type: string }
+                lga: { type: string }
+                trade_category: { type: string }
+                status: { $ref: '#/components/schemas/OperatorStatus' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Operator' } } } }
+        '409': { description: Illegal lifecycle transition (state machine enforced) }
+  /v1/operators/{id}/status:
+    post:
+      summary: Explicit lifecycle transition (preferred over PATCH)
+      tags: [operators]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ to ]
+              properties:
+                to: { $ref: '#/components/schemas/OperatorStatus' }
+                reason: { type: string }
+      responses:
+        '200': { description: Transition applied + audit recorded }
+        '409': { description: Illegal transition }
+  /v1/operators/{id}/audit:
+    get:
+      summary: Lifecycle transition audit trail
+      tags: [operators]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200':
+          description: Audit records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  audit: { type: array, items: { $ref: '#/components/schemas/StatusAudit' } }
+  /v1/operators/lookup:
+    post:
+      summary: Resolve an operator by NIN (status/TIN for USSD tin_status; never echoes the raw NIN)
+      tags: [operators]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ nin ]
+              properties: { nin: { type: string, pattern: '^\d{11}$' } }
+      responses:
+        '200':
+          description: Lookup result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  found: { type: boolean }
+                  operator_id: { type: string }
+                  status: { $ref: '#/components/schemas/OperatorStatus' }
+                  tin: { type: string }
+                  tin_hash: { type: string }
+                  review_status: { type: string }
+  /v1/verify/nin:
+    post:
+      summary: Verify a NIN against NIMC (adapter or simulator per profile)
+      tags: [verification]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [ nin ], properties: { nin: { type: string } } } } }
+      responses:
+        '200': { description: Verification result, content: { application/json: { schema: { $ref: '#/components/schemas/NINVerification' } } } }
+        '502': { description: NIMC adapter error }
+  /v1/tin/provision:
+    post:
+      summary: Run wf-onb-tin-provision (NIMC verify + tin-graph provision) durably
+      tags: [verification]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ operator_id, nin ]
+              properties: { operator_id: { type: string }, nin: { type: string } }
+      responses:
+        '200': { description: Workflow run, content: { application/json: { schema: { $ref: '#/components/schemas/WorkflowRun' } } } }
+        '422':
+          description: 'Workflow failed (e.g. NIMC outage; redrive via /v1/workflows/runs/{id}/redrive)'
+  /v1/verify/tin:
+    post:
+      summary: Verify a TIN exists in tin-graph
+      tags: [verification]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [ tin ], properties: { tin: { type: string } } } } }
+      responses:
+        '200': { description: Result }
+  /v1/consents:
+    post:
+      summary: Capture NDPA consent
+      tags: [operators]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subject: { type: string }
+                purpose: { type: string }
+                channel: { type: string, enum: [ agent_pwa, ussd, paper_digitised ] }
+                granted: { type: boolean }
+      responses:
+        '201': { description: Consent record }
+  /v1/consents/{subject}:
+    get:
+      summary: List consents for a subject
+      tags: [operators]
+      parameters: [ { name: subject, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Consents }
+  /v1/consents/{id}/revoke:
+    post:
+      summary: Revoke a consent
+      tags: [operators]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { description: Revoked }
+  /v1/capture/batch:
+    post:
+      summary: Offline batch ingest (idempotent via Idempotency-Key + client_ref dedup)
+      tags: [capture]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ items ]
+              properties:
+                agent_id: { type: string, description: 'Registered agent id (ag_*); unknown-agent rejected in prod' }
+                items: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/CaptureItem' } }
+      responses:
+        '201': { description: Batch processed, content: { application/json: { schema: { $ref: '#/components/schemas/CaptureBatch' } } } }
+        '200': { description: Duplicate (idempotent replay) }
+  /v1/capture/batch/{key}:
+    get:
+      summary: Get a batch by idempotency key
+      tags: [capture]
+      parameters: [ { name: key, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Batch }
+        '404': { description: Not found }
+  /v1/capture/merge:
+    post:
+      summary: CRDT (OR-Set) offline merge
+      tags: [capture]
+      responses:
+        '200': { description: Merge result }
+  /v1/associations:
+    post:
+      summary: Create a market association
+      tags: [capture]
+      responses:
+        '201': { description: Created }
+  /v1/associations/{id}/bulk:
+    post:
+      summary: Bulk CSV roster enrolment with deterministic client_ref dedup
+      tags: [capture]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { description: Enrolment results }
+  /v1/workflows:
+    get:
+      summary: wf-onb-* workflow catalog
+      tags: [workflows]
+      responses:
+        '200': { description: Workflow names }
+  /v1/workflows/{name}/trigger:
+    post:
+      summary: Trigger a workflow through the durable runner
+      tags: [workflows]
+      parameters: [ { name: name, in: path, required: true, schema: { type: string, enum: [ wf-onb-tin-provision, wf-onb-capture-ingest, wf-onb-ledger-rollup, wf-onb-commission-settlement, wf-onb-filing-reminders, wf-onb-mbs-graduate ] } } ]
+      responses:
+        '200': { description: Run, content: { application/json: { schema: { $ref: '#/components/schemas/WorkflowRun' } } } }
+        '404': { description: Unknown workflow }
+        '422': { description: Run failed }
+  /v1/workflows/runs:
+    get:
+      summary: List persisted workflow runs
+      tags: [workflows]
+      responses:
+        '200': { description: Runs }
+  /v1/workflows/runs/{id}/redrive:
+    post:
+      summary: Idempotently re-drive a crashed/failed run (crash recovery)
+      tags: [workflows]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { description: Re-driven run }
+        '409': { description: Run already completed (idempotent no-op) }
+  /v1/graduation/candidates:
+    post:
+      summary: Stage an MBS graduation candidate
+      tags: [workflows]
+      responses:
+        '201': { description: Staged }
+  /v1/commissions/summary:
+    get:
+      summary: Agent commission accrual summary
+      tags: [workflows]
+      responses:
+        '200': { description: Summary }
+  /v1/agents:
+    post:
+      summary: Register a field agent (server-issued agent_id, vetting=pending)
+      tags: [agents]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AgentCreate' } } }
+      responses:
+        '201': { description: Agent, content: { application/json: { schema: { $ref: '#/components/schemas/Agent' } } } }
+    get:
+      summary: List agents
+      tags: [agents]
+      responses:
+        '200': { description: Agents }
+  /v1/agents/{id}:
+    get:
+      summary: Get an agent
+      tags: [agents]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { description: Agent }
+        '404': { description: Not found }
+  /v1/agents/{id}/vetting:
+    post:
+      summary: Vetting state machine (approve/suspend/reject)
+      tags: [agents]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ status ]
+              properties:
+                status: { type: string, enum: [ pending, approved, suspended, rejected ] }
+                notes: { type: string }
+      responses:
+        '200': { description: Updated agent }
+        '409': { description: Illegal vetting transition }
+  /v1/operators/{id}/documents/presign:
+    post:
+      summary: Presign a WORM document upload URL (MinIO prod / dev FS)
+      tags: [documents]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ kind ]
+              properties:
+                kind: { type: string, enum: [ nin_slip, cac_cert, cac_status_report, photo, other ] }
+                filename: { type: string }
+      responses:
+        '201': { description: Presign result, content: { application/json: { schema: { $ref: '#/components/schemas/PresignResult' } } } }
+  /v1/operators/{id}/documents/complete:
+    post:
+      summary: Attach an uploaded document to the onboarding record
+      tags: [documents]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ doc_id ]
+              properties:
+                doc_id: { type: string }
+                sha256: { type: string }
+                size_bytes: { type: integer }
+      responses:
+        '200': { description: DocRef }
+  /v1/operators/{id}/documents:
+    get:
+      summary: List document references
+      tags: [documents]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { description: DocRefs }
+  /v1/onboarding/{id}:
+    get:
+      summary: Resumption view — current step + missing items
+      tags: [operators]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { description: OnboardingStatus, content: { application/json: { schema: { $ref: '#/components/schemas/OnboardingStatus' } } } }
+        '404': { description: Not found }
+  /v1/review/queue:
+    get:
+      summary: Records awaiting review (agent-captured / parked registrations)
+      tags: [review]
+      responses:
+        '200': { description: Queue }
+  /v1/review/{id}/approve:
+    post:
+      summary: Approve a pending record (admin/operator role)
+      tags: [review]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { description: Approved }
+        '403': { description: Role not permitted }
+  /v1/review/{id}/reject:
+    post:
+      summary: Reject a pending record (admin/operator role)
+      tags: [review]
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { description: Rejected }
+        '403': { description: Role not permitted }
+components:
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    OperatorStatus:
+      type: string
+      enum: [ registered, pending_review, nin_verified, tin_provisioned, graduated, rejected ]
+    OperatorCreate:
+      type: object
+      required: [ nin, full_name ]
+      properties:
+        nin: { type: string, pattern: '^\d{11}$' }
+        full_name: { type: string }
+        phone: { type: string }
+        state: { type: string }
+        lga: { type: string }
+        trade_category: { type: string }
+        agent_id: { type: string }
+    DocRef:
+      type: object
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        filename: { type: string }
+        object_key: { type: string }
+        sha256: { type: string }
+        size_bytes: { type: integer }
+        status: { type: string, enum: [ pending_upload, uploaded, rejected ] }
+        worm: { type: boolean }
+        uploaded_at: { type: string, format: date-time }
+    Operator:
+      type: object
+      properties:
+        id: { type: string }
+        nin_hash: { type: string }
+        tin: { type: string }
+        tin_hash: { type: string }
+        full_name: { type: string }
+        phone: { type: string }
+        state: { type: string }
+        lga: { type: string }
+        trade_category: { type: string }
+        status: { $ref: '#/components/schemas/OperatorStatus' }
+        review_status: { type: string }
+        documents: { type: array, items: { $ref: '#/components/schemas/DocRef' } }
+        agent_id: { type: string }
+        consent_id: { type: string }
+        serial: { type: integer }
+        captured_at: { type: string, format: date-time }
+        synced_at: { type: string, format: date-time }
+        client_ref: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    NINVerification:
+      type: object
+      properties:
+        nin_hash: { type: string }
+        verified: { type: boolean }
+        first_name: { type: string }
+        last_name: { type: string }
+        reference: { type: string }
+        source: { type: string, enum: [ nimc_api, simulator ] }
+        detail: { type: string }
+    WorkflowRun:
+      type: object
+      properties:
+        id: { type: string }
+        workflow: { type: string }
+        input: { }
+        steps: { type: array, items: { type: string } }
+        status: { type: string, enum: [ running, completed, failed ] }
+        error: { type: string }
+        result: { }
+        attempt: { type: integer }
+        target: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+    CaptureItem:
+      type: object
+      required: [ client_ref, nin, full_name, captured_at ]
+      properties:
+        client_ref: { type: string }
+        nin: { type: string }
+        full_name: { type: string }
+        phone: { type: string }
+        state: { type: string }
+        lga: { type: string }
+        trade_category: { type: string }
+        consent_id: { type: string }
+        captured_at: { type: string, format: date-time }
+    CaptureBatch:
+      type: object
+      properties:
+        id: { type: string }
+        idempotency_key: { type: string }
+        agent_id: { type: string }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              client_ref: { type: string }
+              operator_id: { type: string }
+              outcome: { type: string, enum: [ created, duplicate_client_ref, conflict_resolved, rejected ] }
+              detail: { type: string }
+              offline_age_hours: { type: integer }
+        status: { type: string, enum: [ processed, duplicate ] }
+        created_at: { type: string, format: date-time }
+    StatusAudit:
+      type: object
+      properties:
+        id: { type: string }
+        operator_id: { type: string }
+        from: { $ref: '#/components/schemas/OperatorStatus' }
+        to: { $ref: '#/components/schemas/OperatorStatus' }
+        actor: { type: string }
+        at: { type: string, format: date-time }
+    AgentCreate:
+      type: object
+      required: [ full_name, phone ]
+      properties:
+        full_name: { type: string }
+        phone: { type: string }
+        license_no: { type: string }
+        state: { type: string }
+        lga: { type: string }
+        association_id: { type: string }
+    Agent:
+      allOf:
+        - $ref: '#/components/schemas/AgentCreate'
+        - type: object
+          properties:
+            id: { type: string, pattern: '^ag_' }
+            vetting_status: { type: string, enum: [ pending, approved, suspended, rejected ] }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+    PresignResult:
+      type: object
+      properties:
+        doc_id: { type: string }
+        upload_url: { type: string }
+        method: { type: string, enum: [ PUT ] }
+        headers: { type: object, additionalProperties: { type: string } }
+        expires_at: { type: string, format: date-time }
+        backend: { type: string, enum: [ minio_worm, dev_fs ] }
+    OnboardingStatus:
+      type: object
+      properties:
+        operator_id: { type: string }
+        status: { $ref: '#/components/schemas/OperatorStatus' }
+        current_step: { type: string }
+        missing_items: { type: array, items: { type: string } }
+        documents: { type: array, items: { $ref: '#/components/schemas/DocRef' } }
+        review_status: { type: string }
+        tin_hash: { type: string }
+        next_actions: { type: array, items: { type: string } }

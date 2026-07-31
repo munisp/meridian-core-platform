@@ -1,0 +1,26 @@
+openapi: 3.1.0
+info:
+  title: Meridian KYC Engine API (placeholder)
+  version: 0.1.0
+  description: |
+    PLACEHOLDER — path reservation for meridian-compliance-suite/services/kyc-engine
+    (owned by another workstream). Schemas to be completed from that service's code.
+servers: [ { url: http://localhost:8201 } ]
+paths:
+  /healthz:
+    get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }
+  /v1/kyc/cases:
+    post:
+      summary: Open a KYC case (placeholder)
+      responses:
+        '501': { description: Spec placeholder — see compliance-suite }
+    get:
+      summary: List KYC cases (placeholder)
+      responses:
+        '501': { description: Spec placeholder — see compliance-suite }
+  /v1/kyc/cases/{id}/decision:
+    post:
+      summary: Approve/reject a KYC case (placeholder)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '501': { description: Spec placeholder — see compliance-suite }

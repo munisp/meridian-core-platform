@@ -26,7 +26,7 @@ const (
 var seedThresholdsPack []byte
 
 type server struct {
-	st store.DocStore
+	st  store.DocStore
 	cfg graph.MatchConfig
 	nin graph.NINAdapter
 	cac graph.CACAdapter
@@ -115,7 +115,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &server{st: st, cfg: loadMatchConfig(), nin: graph.NINSimulator{}, cac: graph.CACSimulator{}}
+	// O8: fail-closed prod — NIMC/CAC simulators are dev-only; PROFILE=prod
+	// without NIMC_API_URL/CAC_API_URL refuses to start.
+	nin, cac, err := graph.AdaptersFromEnv(os.Getenv("PROFILE"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := &server{st: st, cfg: loadMatchConfig(), nin: nin, cac: cac}
 
 	mux := http.NewServeMux()
 	httpx.RegisterStandard(mux, service, version, nil)
@@ -125,6 +131,8 @@ func main() {
 	mux.HandleFunc("POST /v1/verify/cac", s.verifyCAC)
 	mux.HandleFunc("POST /v1/entities/resolve", s.resolve)
 	mux.HandleFunc("GET /v1/entities/{id}/graph", s.entityGraph)
+	mux.HandleFunc("GET /v1/entities/{id}/ubos", s.entityUBOs)
+	mux.HandleFunc("POST /v1/entities/{id}/kyb", s.updateKYB)
 	mux.HandleFunc("GET /v1/taxpayer360/{tin_hash}", s.taxpayer360Handler) // I1
 	mux.HandleFunc("GET /v1/config/match-thresholds", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, s.cfg)
@@ -152,6 +160,8 @@ type provisionReq struct {
 	Email      string            `json:"email,omitempty"`
 	Address    string            `json:"address,omitempty"`
 	Attrs      map[string]string `json:"attrs,omitempty"`
+	// Company carries the full KYB profile (O7) for CAC-track provision.
+	Company *graph.CompanyProfile `json:"company,omitempty"`
 }
 
 func (s *server) provision(w http.ResponseWriter, r *http.Request) {
@@ -198,11 +208,32 @@ func (s *server) provision(w http.ResponseWriter, r *http.Request) {
 	if req.NIN != "" {
 		e.NINHash = graph.HashValue(req.NIN)
 	}
+	// KYB: full company profile -> directors/shareholders + derived UBOs (O7)
+	if req.Company != nil {
+		cp := req.Company
+		e.EntityType = "company"
+		if cp.RCNumber != "" {
+			e.CACRC = cp.RCNumber
+		}
+		if cp.CompanyName != "" {
+			e.Name = cp.CompanyName
+		}
+		if cp.RegisteredAddress != "" {
+			e.Address = cp.RegisteredAddress
+		}
+		e.Directors = cp.Directors
+		e.Shareholders = cp.Shareholders
+		e.UBOs = graph.DeriveUBOs(cp.Shareholders, nil)
+		e.RegistryCrossCheck = cp.RegistryCrossCheck
+		if e.RegistryCrossCheck == "" {
+			e.RegistryCrossCheck = s.cacProvider()
+		}
+	}
 	if err := s.st.Put("entities", e.ID, e); err != nil {
 		httpx.Internal(w, "%v", err)
 		return
 	}
-	httpx.JSON(w, http.StatusCreated, map[string]any{"entity": e, "tin": tin, "tin_hash": tinHash})
+	httpx.JSON(w, http.StatusCreated, map[string]any{"entity": e, "tin": tin, "tin_hash": tinHash, "ubos": e.UBOs})
 }
 
 func (s *server) verifyTIN(w http.ResponseWriter, r *http.Request) {
@@ -272,6 +303,69 @@ func (s *server) resolve(w http.ResponseWriter, r *http.Request) {
 		"rule_pack":  "rp-identity-match-thresholds",
 		"thresholds": s.cfg,
 	})
+}
+
+// cacProvider reports which CAC adapter is wired (sim tag stays visible).
+func (s *server) cacProvider() string {
+	res, err := s.cac.Verify("RC00000")
+	if err == nil {
+		return res.Provider
+	}
+	return "unknown"
+}
+
+func (s *server) findEntity(id string) (graph.Entity, bool) {
+	for _, e := range s.allEntities() {
+		if e.ID == id {
+			return e, true
+		}
+	}
+	return graph.Entity{}, false
+}
+
+// entityUBOs exposes the derived/declared UBO set (>25%) to onboarding (O7).
+func (s *server) entityUBOs(w http.ResponseWriter, r *http.Request) {
+	e, ok := s.findEntity(r.PathValue("id"))
+	if !ok {
+		httpx.NotFound(w, "entity %s", r.PathValue("id"))
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"entity_id": e.ID, "entity_type": e.EntityType, "cac_rc": e.CACRC,
+		"ubos": e.UBOs, "directors": e.Directors,
+		"ubo_threshold_percent": graph.UBOThresholdPercent,
+		"registry_cross_check":  e.RegistryCrossCheck,
+	})
+}
+
+// updateKYB attaches/refreshes the KYB profile on an existing company
+// entity (document refs + directors/shareholders; UBOs re-derived).
+func (s *server) updateKYB(w http.ResponseWriter, r *http.Request) {
+	e, ok := s.findEntity(r.PathValue("id"))
+	if !ok {
+		httpx.NotFound(w, "entity %s", r.PathValue("id"))
+		return
+	}
+	var cp graph.CompanyProfile
+	if err := httpx.Decode(r, &cp); err != nil {
+		httpx.BadRequest(w, "invalid JSON: %v", err)
+		return
+	}
+	if cp.CompanyName != "" {
+		e.Name = cp.CompanyName
+	}
+	if cp.RegisteredAddress != "" {
+		e.Address = cp.RegisteredAddress
+	}
+	e.Directors = cp.Directors
+	e.Shareholders = cp.Shareholders
+	e.UBOs = graph.DeriveUBOs(cp.Shareholders, e.UBOs)
+	e.RegistryCrossCheck = s.cacProvider()
+	if err := s.st.Put("entities", e.ID, e); err != nil {
+		httpx.Internal(w, "%v", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"entity": e, "ubos": e.UBOs})
 }
 
 func (s *server) entityGraph(w http.ResponseWriter, r *http.Request) {

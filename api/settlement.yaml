@@ -1,0 +1,69 @@
+openapi: 3.1.0
+info:
+  title: Meridian Settlement API
+  version: 1.0.0
+  description: PSSP reconciliation runs, revenue event aggregation, fast-track refunds and break resolution (meridian-core-platform/services/settlement, FastAPI).
+servers: [ { url: http://localhost:8009 } ]
+paths:
+  /healthz:
+    get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }
+  /v1/recon/pssp/run:
+    post:
+      summary: Run a PSSP reconciliation (settlement file vs ledger)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider: { type: string }
+                date: { type: string, format: date }
+      responses:
+        '200': { description: Recon run result (matched/breaks) }
+  /v1/recon/breaks:
+    get:
+      summary: Open reconciliation breaks
+      responses:
+        '200': { description: Breaks }
+  /v1/recon/breaks/{break_id}/resolve:
+    post:
+      summary: Resolve a break
+      parameters: [ { name: break_id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                resolution: { type: string }
+                note: { type: string }
+      responses:
+        '200': { description: Resolved }
+  /v1/revenue/events:
+    get:
+      summary: Revenue events
+      responses:
+        '200': { description: Events }
+  /v1/revenue/aggregate:
+    get:
+      summary: Aggregated revenue view
+      responses:
+        '200': { description: Aggregate }
+  /v1/refunds/fasttrack:
+    post:
+      summary: Fast-track a refund below threshold
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ payment_ref, amount_kobo ]
+              properties:
+                payment_ref: { type: string }
+                amount_kobo: { type: integer }
+                reason: { type: string }
+      responses:
+        '200': { description: Refund result }
