@@ -14,12 +14,14 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from meridian_events.auth import Claims, fastapi_dependency
+from meridian_events.problem import install_problem_handlers
 from meridian_events.store import open_store
 
 SERVICE = "settlement"
 VERSION = "0.1.0"
 
 app = FastAPI(title="Meridian settlement", version=VERSION)
+install_problem_handlers(app)
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -38,25 +40,51 @@ class ReconRunRequest(BaseModel):
     pssp: list[ReconRecord] = Field(default_factory=list)
     treasury: list[ReconRecord] = Field(default_factory=list)
     run_id: str | None = None
+    idempotency_key: str | None = None  # re-posting the same key replays the stored run
 
 
 SIDES = ("platform", "pssp", "treasury")
 
 
-def _index(records: list[ReconRecord]) -> dict[str, ReconRecord]:
+def _index(records: list[ReconRecord]) -> tuple[dict[str, ReconRecord], list[dict]]:
+    """Index by reference; duplicate references inside one side become
+    explicit duplicate_reference breaks (audit: they were silently
+    overwritten). The first occurrence is kept for matching."""
     out: dict[str, ReconRecord] = {}
+    dups: list[dict] = []
+    seen: dict[str, int] = {}
     for r in records:
+        seen[r.reference] = seen.get(r.reference, 0) + 1
         if r.reference in out:
-            # duplicate reference inside one side: keep latest but record break
-            out[r.reference] = r
+            prev = out[r.reference]
+            if prev.amount_kobo != r.amount_kobo:
+                dups.append({
+                    "reference": r.reference, "kind": "duplicate_reference",
+                    "occurrences": seen[r.reference],
+                    "amounts_kobo": {"first": prev.amount_kobo, "duplicate": r.amount_kobo},
+                    "detail": "duplicate reference within one side with differing amounts",
+                })
+            else:
+                dups.append({
+                    "reference": r.reference, "kind": "duplicate_reference",
+                    "occurrences": seen[r.reference],
+                    "amounts_kobo": {"amount": r.amount_kobo},
+                    "detail": "duplicate reference within one side (identical amounts)",
+                })
         else:
             out[r.reference] = r
-    return out
+    return out, dups
 
 
 def reconcile(platform: list[ReconRecord], pssp: list[ReconRecord],
               treasury: list[ReconRecord]) -> dict:
-    sides = {"platform": _index(platform), "pssp": _index(pssp), "treasury": _index(treasury)}
+    indexed = {"platform": _index(platform), "pssp": _index(pssp), "treasury": _index(treasury)}
+    sides = {s: idx for s, (idx, _d) in indexed.items()}
+    dup_breaks = [
+        {**b, "side": s}
+        for s, (_idx, dups) in indexed.items()
+        for b in dups
+    ]
     refs = set().union(*(set(s) for s in sides.values()))
     matched: list[str] = []
     breaks: list[dict] = []
@@ -82,6 +110,7 @@ def reconcile(platform: list[ReconRecord], pssp: list[ReconRecord],
                 "max_delta_kobo": max(amounts.values()) - min(amounts.values()),
                 "detail": "amounts differ across sides",
             })
+    breaks = dup_breaks + breaks
     return {
         "totals": {s: len(sides[s]) for s in SIDES},
         "matched": len(matched),
@@ -105,18 +134,86 @@ def readyz() -> dict:
 def run_recon(req: ReconRunRequest, claims: Claims = Depends(fastapi_dependency())) -> dict:
     if not (req.platform or req.pssp or req.treasury):
         raise HTTPException(400, "at least one side of records is required")
+    if req.idempotency_key:
+        prior = _store.get("idempotency", f"recon:{req.idempotency_key}")
+        if prior is not None:
+            return {"run": prior["run"], "breaks": prior["breaks"],
+                    "idempotent_replay": True}
     result = reconcile(req.platform, req.pssp, req.treasury)
     run_id = req.run_id or f"run-{int(time.time() * 1000)}"
     run = {"run_id": run_id, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "by": claims.sub, **{k: v for k, v in result.items() if k != "breaks"}}
     _store.put("runs", run_id, run)
     existing = _store.list("breaks")
+    stored_breaks = []
     for b in result["breaks"]:
         b = {**b, "run_id": run_id, "status": "open",
              "id": f"{run_id}:{b['reference']}:{b['kind']}"}
         _store.put("breaks", b["id"], b)
         existing.append(b)
-    return {"run": run, "breaks": result["breaks"]}
+        stored_breaks.append(b)
+    if req.idempotency_key:
+        _store.put("idempotency", f"recon:{req.idempotency_key}",
+                   {"run": run, "breaks": stored_breaks})
+    # I5 (REAL): emit nrs.revenue.settled.v1 dashboard documents for matched
+    # references (revenue recognised on 3-way match).
+    emitted = _emit_revenue_events(run_id, req, set(result["matched_references"]))
+    return {"run": run, "breaks": result["breaks"], "revenue_events_emitted": emitted}
+
+
+# ---------------------------------------------------------------------------
+# I5: real-time revenue event stream (nrs.revenue.*)
+# ---------------------------------------------------------------------------
+
+def _emit_revenue_events(run_id: str, req: ReconRunRequest, matched: set[str]) -> int:
+    """Persist OpenSearch-dashboard-ready revenue documents for matched
+    settlement references. Docs are flat, timestamped, integer-kobo."""
+    by_ref = {r.reference: r for r in req.platform}
+    n = 0
+    for ref in sorted(matched):
+        rec = by_ref.get(ref)
+        if rec is None:
+            continue
+        doc = {
+            "type": "nrs.revenue.settled.v1",
+            "@timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "run_id": run_id,
+            "reference": ref,
+            "amount_kobo": rec.amount_kobo,
+            "amount_naira": rec.amount_kobo // 100,
+            "date": rec.date,
+            "channel": (rec.meta or {}).get("channel"),
+            "tax_type": (rec.meta or {}).get("tax_type"),
+            "state": (rec.meta or {}).get("state"),
+            "status": "settled",
+        }
+        _store.put("revenue_events", f"{run_id}:{ref}", doc)
+        n += 1
+    return n
+
+
+@app.get("/v1/revenue/events")
+def revenue_events(limit: int = 200,
+                   claims: Claims = Depends(fastapi_dependency())) -> dict:
+    docs = _store.list("revenue_events")
+    return {"events": docs[-limit:], "count": len(docs)}
+
+
+@app.get("/v1/revenue/aggregate")
+def revenue_aggregate(group_by: str = "tax_type",
+                      claims: Claims = Depends(fastapi_dependency())) -> dict:
+    """Dashboard-ready aggregation of the revenue event stream (integer
+    kobo sums per bucket)."""
+    docs = _store.list("revenue_events")
+    buckets: dict[str, dict] = {}
+    for d in docs:
+        key = str(d.get(group_by) or "unknown")
+        b = buckets.setdefault(key, {"key": key, "count": 0, "total_kobo": 0})
+        b["count"] += 1
+        b["total_kobo"] += int(d.get("amount_kobo") or 0)
+    return {"group_by": group_by,
+            "buckets": sorted(buckets.values(), key=lambda b: -b["total_kobo"]),
+            "total_events": len(docs)}
 
 
 @app.get("/v1/recon/breaks")
