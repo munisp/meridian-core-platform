@@ -1,0 +1,46 @@
+{
+  "app": {
+    "title": "Meridian",
+    "subtitle": "Odu Ochichi NRS"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "applications": "Ngwa",
+    "rulePacks": "Ngwugwu Iwu",
+    "gates": "Onu uzo & Nlele iwu",
+    "ledger": "Akwukwo akuntu",
+    "workflows": "Usoro oru",
+    "audit": "Nyocha & Ihe akaebe",
+    "tenants": "Ndi obibi & Njimara",
+    "flows": "Igafe okeala",
+    "settings": "Ntọala"
+  },
+  "actions": {
+    "signOut": "Puo",
+    "refresh": "Mee ka o di ohuru",
+    "cancel": "Kagbuo",
+    "close": "Mechie",
+    "retry": "Nwalie ozo",
+    "search": "Choo"
+  },
+  "status": {
+    "loading": "Na-ebu…",
+    "empty": "O dighi ihe a ga-egosi ugbu a",
+    "error": "Anyi enweghi ike iru oru ahu.",
+    "offline": "Ịntanetị adịghị"
+  },
+  "user": {
+    "fallback": "Onye oru odu"
+  },
+  "a11y": {
+    "skipToContent": "Gaa na odinaya",
+    "primaryNav": "Isi"
+  },
+  "lang": {
+    "label": "Asụsụ",
+    "en": "English",
+    "ha": "Hausa",
+    "yo": "Yorùbá",
+    "ig": "Igbo"
+  }
+}

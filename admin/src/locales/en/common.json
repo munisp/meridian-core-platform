@@ -1,0 +1,46 @@
+{
+  "app": {
+    "title": "Meridian",
+    "subtitle": "NRS Management Console"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "applications": "Applications",
+    "rulePacks": "Rule Packs",
+    "gates": "Gates & Reg-watch",
+    "ledger": "Ledger",
+    "workflows": "Workflows",
+    "audit": "Audit & Evidence",
+    "tenants": "Tenants & Identity",
+    "flows": "Cross-Zone Flows",
+    "settings": "Settings"
+  },
+  "actions": {
+    "signOut": "Sign out",
+    "refresh": "Refresh",
+    "cancel": "Cancel",
+    "close": "Close",
+    "retry": "Try again",
+    "search": "Search"
+  },
+  "status": {
+    "loading": "Loading…",
+    "empty": "Nothing to show yet",
+    "error": "Couldn't reach the service.",
+    "offline": "Offline"
+  },
+  "user": {
+    "fallback": "Console user"
+  },
+  "a11y": {
+    "skipToContent": "Skip to content",
+    "primaryNav": "Primary"
+  },
+  "lang": {
+    "label": "Language",
+    "en": "English",
+    "ha": "Hausa",
+    "yo": "Yorùbá",
+    "ig": "Igbo"
+  }
+}

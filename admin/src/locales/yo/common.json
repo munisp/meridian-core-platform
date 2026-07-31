@@ -1,0 +1,46 @@
+{
+  "app": {
+    "title": "Meridian",
+    "subtitle": "Ibudo Isakoso NRS"
+  },
+  "nav": {
+    "dashboard": "Patapata",
+    "applications": "Awon eto",
+    "rulePacks": "Akopo Ofin",
+    "gates": "Awon enu-ona & Itoju ofin",
+    "ledger": "Iwe isiro",
+    "workflows": "Isan ise",
+    "audit": "Ayewo & Eri",
+    "tenants": "Awon alaafin & Idanimo",
+    "flows": "Isan koja aala",
+    "settings": "Awon eto isakoso"
+  },
+  "actions": {
+    "signOut": "Jade",
+    "refresh": "Se atunjise",
+    "cancel": "Fagi le",
+    "close": "Pa",
+    "retry": "Gbiyanju leekansi",
+    "search": "Wa"
+  },
+  "status": {
+    "loading": "N gbe e de…",
+    "empty": "Ko si ohun to see fi han sibe",
+    "error": "A ko le de ibi ise naa.",
+    "offline": "Ko si intaneeți"
+  },
+  "user": {
+    "fallback": "Olumulo ibudo"
+  },
+  "a11y": {
+    "skipToContent": "Fo lo si ohun inu",
+    "primaryNav": "Akoko"
+  },
+  "lang": {
+    "label": "Èdè",
+    "en": "English",
+    "ha": "Hausa",
+    "yo": "Yorùbá",
+    "ig": "Igbo"
+  }
+}

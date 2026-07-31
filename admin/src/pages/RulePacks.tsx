@@ -50,9 +50,9 @@ export default function RulePacks() {
         sub="All rp-* packs from the rule-pack registry: status, provenance, signature, publish ceremony and stale-consumer alerts."
         actions={<DevSeedTag source={source} />}
       />
-      {msg && <div className="mb-4 rounded-lg bg-moss-50 border border-moss-200 px-4 py-2.5 text-sm text-moss-800">{msg}</div>}
+      {msg && <div role="status" className="mb-4 rounded-lg bg-success border border-brand-200 px-4 py-2.5 text-sm text-success-on">{msg}</div>}
       {stale.length > 0 && (
-        <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-2.5 text-sm text-amber-800">
+        <div role="alert" className="mb-4 rounded-lg bg-warning border border-warning-strong px-4 py-2.5 text-sm text-warning-on">
           Stale consumers pinned to old versions: {stale.join(', ')}
         </div>
       )}
@@ -60,13 +60,13 @@ export default function RulePacks() {
         <table className="w-full">
           <thead>
             <tr>
-              <th className="th">Pack</th><th className="th">Version</th><th className="th">Status</th>
-              <th className="th">Effective</th><th className="th">Signed</th><th className="th">Citation</th><th className="th"></th>
+              <th scope="col" className="th">Pack</th><th scope="col" className="th">Version</th><th scope="col" className="th">Status</th>
+              <th scope="col" className="th">Effective</th><th scope="col" className="th">Signed</th><th scope="col" className="th">Citation</th><th scope="col" className="th"></th>
             </tr>
           </thead>
           <tbody>
             {packs.map((p) => (
-              <tr key={p.id} className="hover:bg-sand-50">
+              <tr key={p.id} className="hover:bg-neutral-50">
                 <td className="td font-mono text-xs">
                   {p.id}
                   {p.subject_to_regazette && <div className="mt-1"><Badge tone="amber">subject to regazette</Badge></div>}
@@ -101,8 +101,8 @@ export default function RulePacks() {
               <Badge tone="clay">{detail.summary.status}</Badge>
               <DevSeedTag source={detail.source} />
             </div>
-            <p className="text-sm text-sand-600">{detail.summary.source_citation}</p>
-            <pre className="max-h-80 overflow-auto rounded-lg bg-sand-50 border border-sand-200 p-4 text-xs font-mono text-sand-800 whitespace-pre-wrap">
+            <p className="text-sm text-stone-600">{detail.summary.source_citation}</p>
+            <pre className="max-h-80 overflow-auto rounded-lg bg-neutral-50 border border-neutral-200 p-4 text-xs font-mono text-stone-800 whitespace-pre-wrap">
               {detail.yaml}
             </pre>
           </div>

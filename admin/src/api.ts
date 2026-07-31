@@ -58,9 +58,9 @@ export async function sha256Hex(content: string): Promise<string> {
     .join('')
 }
 
-export function fmtKobo(kobo: number): string {
-  return '₦' + (kobo / 100).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
+// Money formatting lives in lib/format (Meridian One §9) — re-exported here
+// so existing call sites keep working. New code should import lib/format.
+export { formatNGN as fmtKobo } from './lib/format'
 
 export function fmtTime(ts?: string): string {
   if (!ts) return '—'

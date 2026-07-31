@@ -1,49 +1,31 @@
 /** @type {import('tailwindcss').Config} */
+// Meridian One §2 — token block (hex values are the single source of truth,
+// identical in every Meridian app). `brand` is the deep-green identity scale;
+// `neutral` is the warm-sand surface scale; semantic colors are status-only.
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        // low-saturation warm-neutral palette (no blue-purple gradients)
-        sand: {
-          50: '#faf9f7',
-          100: '#f4f2ee',
-          200: '#e8e4dc',
-          300: '#d6d0c4',
-          400: '#b8b0a0',
-          500: '#968d7a',
-          600: '#7a7261',
-          700: '#625c4f',
-          800: '#504b41',
-          900: '#454037',
+        brand: {
+          50: '#f0fdf4', 100: '#dcfce7', 200: '#bbf7d0', 300: '#86efac',
+          400: '#4ade80', 500: '#22c55e', 600: '#16a34a', 700: '#15803d',
+          800: '#166534', 900: '#14532d', 950: '#052e16',
         },
-        clay: {
-          50: '#faf5f2',
-          100: '#f3e8e1',
-          200: '#e4cfc2',
-          300: '#d0ac97',
-          400: '#bc8a6e',
-          500: '#a96f52',
-          600: '#8f5a41',
-          700: '#764837',
-          800: '#613d31',
-          900: '#51342b',
+        neutral: {
+          50: '#faf7f2', 100: '#f4eee3', 200: '#e9dcc8', 300: '#d9c9ae',
+          400: '#c3ae8b', 500: '#a98f66', 600: '#8a6d3b', 700: '#6f5830',
+          800: '#554325', 900: '#3b2f1b',
         },
-        moss: {
-          50: '#f6f7f4',
-          100: '#e8ece3',
-          200: '#d1d9c8',
-          300: '#aebda1',
-          400: '#879d78',
-          500: '#68805a',
-          600: '#516546',
-          700: '#41503a',
-          800: '#374131',
-          900: '#2f372b',
-        },
+        // Semantic (text-on-white values pre-verified ≥4.5:1; surfaces pair
+        // with their on-surface text token).
+        success: { DEFAULT: '#f0fdf4', strong: '#15803d', on: '#166534' },
+        warning: { DEFAULT: '#fffbeb', strong: '#92400e', on: '#92400e' },
+        danger: { DEFAULT: '#fef2f2', strong: '#b91c1c', on: '#991b1b' },
+        info: { DEFAULT: '#eff6ff', strong: '#1d4ed8', on: '#1e40af' },
       },
       fontFamily: {
-        sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        sans: ['ui-sans-serif', 'system-ui', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
       },
     },
