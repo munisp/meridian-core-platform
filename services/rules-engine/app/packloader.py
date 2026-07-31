@@ -1,7 +1,16 @@
 """Pack loading: local PACKS_DIR (packs/<id>/<version>.yaml) and/or the
-rp-registry service (RP_REGISTRY_URL). Packs are validated on load."""
+rp-registry service (RP_REGISTRY_URL). Packs are validated on load.
+
+Integrity (PACK_INTEGRITY=enforce|off, default: enforce when a lockfile is
+found): packs pinned in a packs.lock.json (PACKS_LOCK_PATH) must match their
+canonical sha256 pin; published packs must carry an ed25519 ceremony
+signature that verifies against rule-packs/signing_keys.json
+(PACK_SIGNING_KEYS). Unsigned or hash-mismatched published packs are
+rejected when enforcing."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import threading
 from pathlib import Path
@@ -14,13 +23,83 @@ class PackNotFound(KeyError):
     pass
 
 
+class PackIntegrityError(ValueError):
+    """Hash pin mismatch, missing/invalid signature, or unsigned published
+    pack while integrity enforcement is active."""
+
+
+def canonical_pack_bytes(pack: dict) -> bytes:
+    """Canonical bytes for hashing/signing: the pack mapping without the
+    `signed` block, JSON-dumped with sorted keys."""
+    p = {k: v for k, v in pack.items() if k != "signed"}
+    return json.dumps(p, sort_keys=True, separators=(",", ":"), default=str).encode()
+
+
+def _load_lock(lock_path: Path) -> dict:
+    try:
+        return json.loads(lock_path.read_text()).get("pins", {})
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _load_signing_keys(keys_path: Path) -> dict:
+    try:
+        return json.loads(keys_path.read_text()).get("keys", {})
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _verify_ed25519(sig_hex: str, msg: bytes, pub_hex: str) -> bool:
+    try:
+        from ed25519_verify import verify  # vendored beside this file
+    except ImportError:
+        try:
+            import sys
+
+            sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "packages" / "rulepack-schema"))
+            from ed25519_verify import verify
+        except ImportError:
+            return False
+    try:
+        return verify(bytes.fromhex(sig_hex), msg, bytes.fromhex(pub_hex))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class PackLoader:
-    def __init__(self, packs_dir: str | None = None, registry_url: str | None = None) -> None:
+    def __init__(self, packs_dir: str | None = None, registry_url: str | None = None,
+                 lock_path: str | None = None, signing_keys_path: str | None = None,
+                 enforce: bool | None = None) -> None:
         self.packs_dir = Path(packs_dir or os.environ.get("PACKS_DIR", "packs"))
         self.registry_url = (registry_url or os.environ.get("RP_REGISTRY_URL", "")).rstrip("/")
         self._lock = threading.RLock()
         self._cache: dict[str, dict] = {}
         self._mtime: dict[str, float] = {}
+        lock_env = os.environ.get("PACKS_LOCK_PATH", "")
+        keys_env = os.environ.get("PACK_SIGNING_KEYS", "")
+        candidates = [lock_env] if lock_env else [
+            str(self.packs_dir / "packs.lock.json"),
+            str(self.packs_dir.parent / "packs.lock.json"),
+            str(self.packs_dir.parent.parent / "rule-packs" / "packs.lock.json"),
+        ]
+        self._pins: dict[str, dict] = {}
+        for c in candidates:
+            if c and Path(c).exists():
+                self._pins = _load_lock(Path(c))
+                break
+        key_candidates = [keys_env] if keys_env else [
+            str(self.packs_dir / "signing_keys.json"),
+            str(self.packs_dir.parent / "signing_keys.json"),
+            str(self.packs_dir.parent.parent / "rule-packs" / "signing_keys.json"),
+        ]
+        self._signing_keys: dict[str, dict] = {}
+        for c in key_candidates:
+            if c and Path(c).exists():
+                self._signing_keys = _load_signing_keys(Path(c))
+                break
+        if enforce is None:
+            enforce = os.environ.get("PACK_INTEGRITY", "").lower() == "enforce" or bool(self._pins)
+        self.enforce = enforce
 
     @staticmethod
     def key(pack_id: str, version: str | None) -> str:
@@ -36,10 +115,38 @@ class PackLoader:
             if k in self._cache and self._mtime.get(k) == mtime:
                 return self._cache[k]
         pack = yaml.safe_load(path.read_text())
+        if isinstance(pack, dict):
+            self._verify_integrity(pack_id, str(version), pack)
         with self._lock:
             self._cache[k] = pack
             self._mtime[k] = mtime
         return pack
+
+    def _verify_integrity(self, pack_id: str, version: str, pack: dict) -> None:
+        """Enforce sha256 pins + ceremony signatures on published packs."""
+        if not self.enforce:
+            return
+        pin = (self._pins.get(pack_id) or {}).get("sha256")
+        digest = hashlib.sha256(canonical_pack_bytes(pack)).hexdigest()
+        if pin and pin != digest:
+            raise PackIntegrityError(
+                f"{pack_id}@{version}: sha256 pin mismatch "
+                f"(lock={pin[:16]}… actual={digest[:16]}…)")
+        if pack.get("status") != "published":
+            return  # simulation/draft packs may be unsigned
+        signed = pack.get("signed")
+        if not signed:
+            raise PackIntegrityError(
+                f"{pack_id}@{version}: published pack is unsigned")
+        if signed.get("algorithm") != "ed25519":
+            raise PackIntegrityError(f"{pack_id}@{version}: unsupported signature algorithm")
+        key = self._signing_keys.get(signed.get("key_id", ""))
+        if not key:
+            raise PackIntegrityError(
+                f"{pack_id}@{version}: unknown signing key_id {signed.get('key_id')!r}")
+        if not _verify_ed25519(str(signed.get("signature", "")), bytes.fromhex(digest),
+                               str(key.get("public_key_hex", ""))):
+            raise PackIntegrityError(f"{pack_id}@{version}: signature verification failed")
 
     def latest_local(self, pack_id: str) -> dict | None:
         d = self.packs_dir / pack_id
@@ -87,6 +194,39 @@ class PackLoader:
         if pack is None:
             raise PackNotFound(f"{pack_id}@{version or 'latest'}")
         return pack
+
+    def get_for_date(self, pack_id: str, filing_date: str,
+                     version: str | None = None) -> dict:
+        """Effective-date pack selection: pick the version in force at
+        filing_date (effective_from <= filing_date <= effective_to), so
+        backdated filings evaluate against the law as it then stood.
+        Falls back to get() when no versioned local directory exists."""
+        d = self.packs_dir / pack_id
+        if version in (None, "latest") and d.exists():
+            versions = sorted(
+                (p.stem for p in d.glob("*.yaml")),
+                key=lambda v: [int(x) for x in v.split(".") if x.isdigit()],
+            )
+            candidates: list[dict] = []
+            for v in versions:
+                try:
+                    pack = self.load_local(pack_id, v)
+                except PackIntegrityError:
+                    raise
+                except Exception:  # noqa: BLE001
+                    continue
+                if pack:
+                    candidates.append(pack)
+            in_force = [
+                p for p in candidates
+                if (not p.get("effective_from") or str(p["effective_from"]) <= filing_date)
+                and (not p.get("effective_to") or str(p["effective_to"]) >= filing_date)
+            ]
+            if in_force:
+                published = [p for p in in_force if p.get("status") == "published"]
+                pool = published or in_force
+                return max(pool, key=lambda p: str(p.get("effective_from") or ""))
+        return self.get(pack_id, version)
 
     def list_loaded(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
