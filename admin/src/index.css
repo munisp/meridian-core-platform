@@ -4,41 +4,59 @@
 
 @layer base {
   body {
-    @apply bg-sand-100 text-sand-900 antialiased;
+    /* Meridian One §2 — warm-neutral page surface, cool-dark ink body text. */
+    @apply bg-neutral-50 text-stone-900 antialiased;
+  }
+  /* Every interactive element gets a visible focus ring (spec §8). */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-700 ring-offset-2;
   }
 }
 
 @layer components {
   .card {
-    @apply bg-white rounded-xl border border-sand-200 shadow-sm;
+    @apply bg-white rounded-lg border border-neutral-200 shadow-sm;
   }
   .btn {
-    @apply inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors
+    @apply inline-flex items-center gap-1.5 rounded-md px-3.5 py-2 text-sm font-medium transition-colors
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
       disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply btn bg-clay-700 text-white hover:bg-clay-800;
+    @apply btn bg-brand-700 text-white hover:bg-brand-800 focus-visible:ring-brand-700;
   }
   .btn-secondary {
-    @apply btn bg-white border border-sand-300 text-sand-800 hover:bg-sand-100;
+    @apply btn bg-white border border-neutral-300 text-stone-800 hover:bg-neutral-100 focus-visible:ring-brand-700;
   }
   .btn-danger {
-    @apply btn bg-red-700 text-white hover:bg-red-800;
+    @apply btn bg-danger-strong text-white hover:bg-red-800 focus-visible:ring-danger-strong;
   }
   .input {
-    @apply w-full rounded-lg border border-sand-300 bg-white px-3 py-2 text-sm text-sand-900
-      placeholder-sand-400 focus:outline-none focus:ring-2 focus:ring-clay-300 focus:border-clay-400;
+    @apply w-full h-11 rounded-md border border-neutral-300 bg-white px-3 text-sm text-stone-900
+      placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-brand-400
+      aria-[invalid="true"]:border-danger-strong;
   }
   .label {
-    @apply block text-xs font-semibold uppercase tracking-wide text-sand-500 mb-1.5;
+    @apply block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5;
   }
   .th {
-    @apply px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-sand-500 border-b border-sand-200;
+    @apply px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-stone-600 border-b border-neutral-200;
   }
   .td {
-    @apply px-4 py-3 text-sm text-sand-800 border-b border-sand-100 align-top;
+    @apply px-4 py-3 text-sm text-stone-800 border-b border-neutral-100 align-top;
   }
   .badge {
-    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .skeleton {
+    @apply animate-pulse rounded-md bg-neutral-200;
+  }
+}
+
+/* Skeleton pulse + spinner are the only exempt animations; everything else
+   respects reduced motion (Meridian One §6). */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
   }
 }
