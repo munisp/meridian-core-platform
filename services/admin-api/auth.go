@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -75,12 +76,34 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 
-// requireAuth enforces Bearer JWT; in AUTH_MODE=dev also accepts X-Dev-Role header (SPEC §1.3).
+// requireAuth enforces Bearer JWT; in AUTH_MODE=dev also accepts X-Dev-Role
+// header (SPEC §1.3). AUTH_MODE=keycloak verifies RS256 tokens against the
+// Keycloak JWKS and NEVER honours X-Dev-Role; a keycloak verifier that
+// cannot be configured fails CLOSED (every request denied).
 func (a *app) requireAuth(next http.Handler) http.Handler {
+	var kc *keycloakVerifier
+	if a.authMode == "keycloak" {
+		v, err := newKeycloakVerifier()
+		if err != nil {
+			log.Printf("profile=prod component=admin-api keycloak misconfigured (%v); FAILING CLOSED", err)
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeProblem(w, http.StatusServiceUnavailable, "auth misconfigured",
+					"AUTH_MODE=keycloak but the Keycloak verifier is not configured; refusing all requests (fail closed)")
+			})
+		}
+		kc = v
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		if strings.HasPrefix(auth, "Bearer ") {
-			c, err := a.verifyJWT(strings.TrimPrefix(auth, "Bearer "))
+			tok := strings.TrimPrefix(auth, "Bearer ")
+			var c *claims
+			var err error
+			if kc != nil {
+				c, err = kc.verifyJWT(tok)
+			} else {
+				c, err = a.verifyJWT(tok)
+			}
 			if err != nil {
 				writeProblem(w, http.StatusUnauthorized, "unauthorized", err.Error())
 				return

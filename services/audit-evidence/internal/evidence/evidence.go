@@ -41,34 +41,49 @@ func canonical(v any) []byte {
 }
 
 // computeHash derives the chain hash of an event (over everything but Hash).
-func computeHash(e AuditEvent) string {
-	h := sha256.New()
-	h.Write([]byte(e.PrevHash))
-	// seq is assigned by the append log after hashing, so it is covered
-	// implicitly by chain order (prev_hash links) rather than the hash itself.
+// A5 hardening: the chain is KEYED (HMAC-SHA256 when chainKey != nil) so an
+// attacker with write access to the log file cannot recompute hashes, and
+// the sequence number is covered by the hash itself (previously seq was
+// assigned after hashing, leaving reorder/replay invisible to the hash).
+func computeHash(e AuditEvent, chainKey []byte) string {
 	payload := map[string]any{
+		"seq": e.Seq,
 		"id": e.ID, "time": e.Time, "actor": e.Actor,
 		"subject": e.Subject, "action": e.Action, "type": e.Type,
 		"tenant_id": e.TenantID, "rule_pack_version": e.RulePackVersion,
 		"details": e.Details,
 	}
-	h.Write(canonical(payload))
-	return hex.EncodeToString(h.Sum(nil))
+	var sum []byte
+	if len(chainKey) > 0 {
+		mac := hmac.New(sha256.New, chainKey)
+		mac.Write([]byte(e.PrevHash))
+		mac.Write(canonical(payload))
+		sum = mac.Sum(nil)
+	} else {
+		h := sha256.New()
+		h.Write([]byte(e.PrevHash))
+		h.Write(canonical(payload))
+		sum = h.Sum(nil)
+	}
+	return hex.EncodeToString(sum)
 }
 
 // AuditLog is the hash-chained append-only log.
 type AuditLog struct {
-	log  *store.AppendLog
-	tail string // hash of last event ("" = genesis)
+	log     *store.AppendLog
+	tail    string // hash of last event ("" = genesis)
+	key     []byte // chain HMAC key (nil = legacy unkeyed chain)
+	nextSeq int64
 }
 
-// OpenAuditLog opens the log and recovers the chain tail.
-func OpenAuditLog(dir string) (*AuditLog, error) {
+// OpenAuditLog opens the log and recovers the chain tail. chainKey keys the
+// hash chain (HMAC-SHA256); pass nil only for legacy dev chains.
+func OpenAuditLog(dir string, chainKey []byte) (*AuditLog, error) {
 	l, err := store.OpenAppendLog(dir, "audit")
 	if err != nil {
 		return nil, err
 	}
-	al := &AuditLog{log: l}
+	al := &AuditLog{log: l, key: chainKey, nextSeq: 1}
 	recs, err := l.ReadAll()
 	if err != nil {
 		return nil, err
@@ -77,12 +92,16 @@ func OpenAuditLog(dir string) (*AuditLog, error) {
 		var last AuditEvent
 		if json.Unmarshal(recs[len(recs)-1], &last) == nil {
 			al.tail = last.Hash
+			if last.Seq >= al.nextSeq {
+				al.nextSeq = last.Seq + 1
+			}
 		}
 	}
 	return al, nil
 }
 
-// Append adds an event to the chain.
+// Append adds an event to the chain. Seq is assigned BEFORE hashing so it
+// is covered by the (keyed) chain hash.
 func (al *AuditLog) Append(e AuditEvent) (AuditEvent, error) {
 	if e.ID == "" {
 		e.ID = envelope.NewULID()
@@ -90,11 +109,14 @@ func (al *AuditLog) Append(e AuditEvent) (AuditEvent, error) {
 	if e.Time == "" {
 		e.Time = time.Now().UTC().Format(time.RFC3339Nano)
 	}
+	e.Seq = al.nextSeq
 	e.PrevHash = al.tail
-	e.Hash = computeHash(e)
-	if _, err := al.log.Append(e); err != nil {
+	e.Hash = computeHash(e, al.key)
+	seq, err := al.log.Append(e)
+	if err != nil {
 		return e, err
 	}
+	al.nextSeq = seq + 1
 	al.tail = e.Hash
 	return e, nil
 }
@@ -127,7 +149,7 @@ func (al *AuditLog) VerifyChain() (int64, error) {
 		if e.PrevHash != prev {
 			return e.Seq, nil
 		}
-		if computeHash(e) != e.Hash {
+		if computeHash(e, al.key) != e.Hash {
 			return e.Seq, nil
 		}
 		prev = e.Hash

@@ -20,13 +20,34 @@ from ml.training import train as T  # noqa: E402
 EPOCHS = 6
 
 
-def _dataset():
-    return load_frame(force_regen=True, cache=str(ML_ROOT / "data" / "cache_test"),
+def _dataset(cache_dir=None):
+    cache = str(cache_dir) if cache_dir else str(ML_ROOT / "data" / "cache_test")
+    return load_frame(force_regen=True, cache=cache,
                       n_entities=300, n_agents=25, days=45, n_rings=3, seed=7)
 
 
-def test_end_to_end(tmp_path=None):
-    df, graph = _dataset()
+def test_end_to_end(tmp_path):
+    # Redirect the file registry into tmp_path so the training run never
+    # dirties the real checked-in ml/registry/ (manifest + v2 weights).
+    import shutil
+
+    dst = tmp_path / "registry"
+    shutil.copytree(ML_ROOT / "registry", dst,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    registry.REGISTRY_DIR = dst
+    registry.MANIFEST = dst / "manifest.json"
+    registry._MANIFEST_CACHE = None
+    T.METRICS_PATH = dst / "metrics.json"
+    try:
+        _run_end_to_end(tmp_path)
+    finally:
+        registry.REGISTRY_DIR = ML_ROOT / "registry"
+        registry.MANIFEST = registry.REGISTRY_DIR / "manifest.json"
+        registry._MANIFEST_CACHE = None
+
+
+def _run_end_to_end(tmp_path):
+    df, graph = _dataset(cache_dir=tmp_path / "data_cache")
     assert len(df) > 2000 and df["label"].sum() > 50
     assert set(synthetic.FEATURES) <= set(df.columns)
 
@@ -42,7 +63,7 @@ def test_end_to_end(tmp_path=None):
     for name in ["fraud_mlp", "fraud_autoencoder", "credit_score", "gnn_gcn", "fraudfusion", "mcmc"]:
         act = registry.active(name)
         assert act is not None, f"{name} not registered"
-        path = ML_ROOT / "registry" / act[1]["path"]
+        path = registry.REGISTRY_DIR / act[1]["path"]
         assert path.exists() and path.suffix == ".b64", f"missing weights for {name}"
         registry.load_weights(path)  # decodes
 
@@ -61,5 +82,7 @@ def test_end_to_end(tmp_path=None):
 
 
 if __name__ == "__main__":
-    test_end_to_end()
+    import tempfile
+
+    test_end_to_end(Path(tempfile.mkdtemp()))
     print("PASS")

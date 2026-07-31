@@ -295,6 +295,10 @@ def apply_then(rule_id: str, then: dict, context: dict) -> dict:
         out["kind"] = "set"
     if "set" in then and "set" not in out:
         out["set"] = then["set"]
+    # Carry an explicit decision label alongside computed kinds (e.g. a
+    # zero-rated VAT rule sets both rate_bps: 0 and decision: zero_rated).
+    if "decision" in then and "decision" not in out:
+        out["decision"] = then["decision"]
     if "narrate" in then:
         out["narrate"] = then["narrate"]
     return out

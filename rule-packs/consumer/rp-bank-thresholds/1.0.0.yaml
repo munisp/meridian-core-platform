@@ -1,0 +1,38 @@
+# [seed] rp-bank-thresholds — NRS/FIU reporting thresholds (CTR N10m etc.).
+# Wired to the ledger transfer hook (I7): transfers at/above the CTR threshold
+# emit a currency-transaction-report event; sub-threshold splitting patterns
+# emit structuring-suspicion events.
+id: rp-bank-thresholds
+version: 1.0.0
+effective_from: 2023-01-01
+effective_to: null
+status: published
+subject_to_regazette: true
+provenance:
+  as_passed: "Money Laundering (Prevention and Prohibition) Act 2022; NFIU CTR guidance, as passed"
+  as_gazetted: null
+  source_citation: "MLPPA 2022 s.11 (currency transaction reporting above threshold); SCUML/CTR practice (N10,000,000)"
+signed:
+  algorithm: ed25519
+  key_id: meridian-ceremony-dev-001
+  signature: 7d96b2ccd85bebd73fc005f102905c445ed275a364056e6d90979bfbc036bf8039271428dd6edc53dc513b8bec5160a9082f30d1fd320b8eb3d687cc9e45eb0b
+rules:
+  - id: bank.ctr.single-transfer
+    description: "Single transfer at/above N10,000,000 (1e9 kobo) is CTR-reportable"
+    when: { amount_kobo: { gte: 1000000000 } }
+    then:
+      threshold:
+        field: amount_kobo
+        op: gte
+        value: 1000000000
+        decision_if_true: ctr_reportable
+        decision_if_false: pass
+      narrate: "CTR: individual transfer >= N10m must be reported"
+  - id: bank.structuring.sub-threshold-split
+    description: "Sub-threshold splitting: multiple transfers just below N10m from one account in a window"
+    when: { window_transfer_count: { gte: 3 }, window_total_kobo: { gte: 1000000000 }, max_single_kobo: { lt: 1000000000 } }
+    then: { decision: structuring_suspicion, narrate: "Structuring suspicion: split transfers below CTR threshold totalling >= N10m" }
+  - id: bank.structuring.near-threshold
+    description: "Single transfer in the N8m..N10m band (structuring proximity signal)"
+    when: { amount_kobo: { gte: 800000000, lt: 1000000000 } }
+    then: { decision: review, narrate: "Review: transfer in structuring-proximity band (N8m-N10m)" }

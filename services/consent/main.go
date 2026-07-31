@@ -3,11 +3,14 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
@@ -36,15 +39,18 @@ type Consent struct {
 	Status      string         `json:"status"` // active|revoked|expired
 }
 
-// Receipt is the NDPA receipt issued for every consent action.
+// Receipt is the NDPA receipt issued for every consent action. HMAC is a
+// keyed HMAC-SHA256 over the receipt contents (A7: receipts are forged by
+// no one holding only the data store — the key never leaves the service).
 type Receipt struct {
 	ReceiptID string `json:"receipt_id"`
 	ConsentID string `json:"consent_id"`
 	Subject   string `json:"subject"`
-	Action    string `json:"action"` // granted|revoked
+	Action    string `json:"action"` // granted|denied|revoked|renewed
 	Time      string `json:"time"`
 	Actor     string `json:"actor"`
 	SHA256    string `json:"sha256"` // hash of the consent record at action time
+	HMAC      string `json:"hmac"`   // keyed HMAC-SHA256 over the fields above
 }
 
 var lawfulBases = map[string]bool{
@@ -53,7 +59,8 @@ var lawfulBases = map[string]bool{
 }
 
 type server struct {
-	st store.DocStore
+	st         store.DocStore
+	receiptKey []byte
 }
 
 func hashConsent(c Consent) string {
@@ -72,25 +79,58 @@ func (s *server) issueReceipt(c Consent, action, actor string) Receipt {
 		Actor:     actor,
 		SHA256:    hashConsent(c),
 	}
+	r.HMAC = receiptHMAC(s.receiptKey, r)
 	if err := s.st.Put("receipts", r.ReceiptID, r); err != nil {
 		log.Printf("receipt persist: %v", err)
 	}
 	return r
 }
 
+// receiptHMAC computes the keyed receipt seal over the stable fields.
+func receiptHMAC(key []byte, r Receipt) string {
+	payload := strings.Join([]string{
+		r.ReceiptID, r.ConsentID, r.Subject, r.Action, r.Time, r.Actor, r.SHA256,
+	}, "|")
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(payload))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// VerifyReceipt recomputes the receipt seal (exposed for audit checks).
+func (s *server) VerifyReceipt(r Receipt) bool {
+	return hmac.Equal([]byte(receiptHMAC(s.receiptKey, r)), []byte(r.HMAC))
+}
+
+// ownsConsent enforces NDPA ownership: only the subject themselves or an
+// admin may act on a consent record (A7).
+func ownsConsent(claims auth.Claims, c Consent) bool {
+	return claims.Sub == c.Subject || claims.HasRole("admin")
+}
+
 func main() {
 	dir := httpx.Env("DATA_DIR", "./data")
+	// A7: dedicated receipt HMAC key. PROFILE=prod REQUIRES it (no dev
+	// default) so receipts are unforgeable by store-only attackers.
+	receiptKey := os.Getenv("CONSENT_RECEIPT_KEY")
+	if receiptKey == "" {
+		if os.Getenv("PROFILE") == "prod" {
+			log.Fatal("profile=prod FATAL: CONSENT_RECEIPT_KEY is required (no dev default)")
+		}
+		receiptKey = "meridian-dev-consent-receipt-key"
+		log.Printf("profile=dev component=consent WARNING: CONSENT_RECEIPT_KEY unset, using dev key")
+	}
 	st, err := store.OpenFromEnv(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &server{st: st}
+	s := &server{st: st, receiptKey: []byte(receiptKey)}
 
 	mux := http.NewServeMux()
 	httpx.RegisterStandard(mux, service, version, nil)
 	mux.HandleFunc("POST /v1/consents", s.create)
 	mux.HandleFunc("GET /v1/consents/{subject}", s.listBySubject)
 	mux.HandleFunc("POST /v1/consents/{id}/revoke", s.revoke)
+	mux.HandleFunc("POST /v1/consents/{id}/renew", s.renew)
 	mux.HandleFunc("GET /v1/receipts/{id}", s.getReceipt)
 
 	addr := ":" + httpx.Port("8007")
@@ -188,6 +228,13 @@ func (s *server) revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, _ := auth.FromContext(r.Context())
+	// A7: revoke requires subject ownership or admin role (NDPA: only the
+	// data subject or an authorised officer may withdraw consent).
+	if !ownsConsent(claims, c) {
+		httpx.Errorf(w, http.StatusForbidden, "forbidden",
+			"only the data subject or an admin may revoke this consent")
+		return
+	}
 	c.Status = "revoked"
 	c.Granted = false
 	c.RevokedAt = time.Now().UTC().Format(time.RFC3339)
@@ -196,6 +243,45 @@ func (s *server) revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	receipt := s.issueReceipt(c, "revoked", claims.Sub)
+	httpx.JSON(w, http.StatusOK, map[string]any{"consent": c, "receipt": receipt})
+}
+
+// renew: POST /v1/consents/{id}/renew {"expires_at": "..."} — A7. Extends or
+// reactivates a non-revoked consent; revoked consents must be re-granted via
+// POST /v1/consents (a fresh grant, not a silent resurrection).
+func (s *server) renew(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ExpiresAt string `json:"expires_at"` // RFC3339; empty = non-expiring
+	}
+	if err := httpx.Decode(r, &req); err != nil {
+		httpx.Errorf(w, http.StatusBadRequest, "bad request", "%v", err)
+		return
+	}
+	id := r.PathValue("id")
+	var c Consent
+	if err := s.st.Get("consents", id, &c); err != nil {
+		httpx.NotFound(w, "consent %s", id)
+		return
+	}
+	claims, _ := auth.FromContext(r.Context())
+	if !ownsConsent(claims, c) {
+		httpx.Errorf(w, http.StatusForbidden, "forbidden",
+			"only the data subject or an admin may renew this consent")
+		return
+	}
+	if c.Status == "revoked" {
+		httpx.Conflict(w, "consent %s is revoked; grant a fresh consent instead", id)
+		return
+	}
+	c.Status = "active"
+	c.Granted = true
+	c.RevokedAt = ""
+	c.ExpiresAt = req.ExpiresAt
+	if err := s.st.Put("consents", id, c); err != nil {
+		httpx.Internal(w, "%v", err)
+		return
+	}
+	receipt := s.issueReceipt(c, "renewed", claims.Sub)
 	httpx.JSON(w, http.StatusOK, map[string]any{"consent": c, "receipt": receipt})
 }
 

@@ -2,6 +2,19 @@
 
 Offline: DuckDB columnar store (parquet-capable). Online: low-latency KV.
 Materialisation computes aggregations over source records into both stores.
+
+Monetary features (kobo): features whose value_field ends in ``_kobo`` (or
+with ``kobo: true``) are stored as BIGINT (int64) in the ``value_kobo``
+column — never DOUBLE — so sums over large ledgers stay exact (float64 loses
+integer precision beyond 2^53). PARQUET SCHEMA CHANGE: source parquet files
+for kobo features must use INT64/BIGINT physical types; legacy DOUBLE kobo
+columns are rejected on materialisation (re-export with int64).
+
+TODO(point-in-time joins): training-set assembly must join features AS OF
+the label timestamp (feature ts <= label ts), not latest-wins, or offline
+metrics are optimistic (training/serving skew). The DuckDB history table
+already retains per-ts rows to support this; the join builder is pending.
+See ml/training/train.py for the corresponding guard note.
 """
 from __future__ import annotations
 
@@ -15,12 +28,14 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from meridian_events.auth import Claims, fastapi_dependency
+from meridian_events.problem import install_problem_handlers
 from meridian_events.store import open_store
 
 SERVICE = "feature-store"
 VERSION = "0.1.0"
 
 app = FastAPI(title="Meridian feature-store", version=VERSION)
+install_problem_handlers(app)
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,9 +46,14 @@ with _lock:
     _db.execute("""
         CREATE TABLE IF NOT EXISTS feature_values (
             entity TEXT NOT NULL, name TEXT NOT NULL,
-            value DOUBLE, value_text TEXT, ts DOUBLE NOT NULL,
+            value DOUBLE, value_kobo BIGINT, value_text TEXT, ts DOUBLE NOT NULL,
             PRIMARY KEY (entity, name, ts))
     """)
+    # migrations for pre-existing databases
+    try:
+        _db.execute("ALTER TABLE feature_values ADD COLUMN value_kobo BIGINT")
+    except Exception:  # noqa: BLE001 - column already present
+        pass
 _online = open_store(DATA_DIR / "online")
 
 AGGS = {"last", "sum", "count", "avg", "min", "max"}
@@ -46,6 +66,11 @@ class FeatureDef(BaseModel):
     agg: str = "last"
     window_days: int | None = None  # trailing window filter on ts_field
     ts_field: str = "ts"
+    kobo: bool = False  # monetary feature: stored as int64, never float64
+
+    @property
+    def is_kobo(self) -> bool:
+        return self.kobo or bool(self.value_field and self.value_field.endswith("_kobo"))
 
 
 class MaterialiseRequest(BaseModel):
@@ -76,15 +101,26 @@ def _materialise(fd: FeatureDef, records: list[dict]) -> dict:
         if cutoff and ts < cutoff:
             continue
         groups.setdefault(str(ent), []).append((ts, rec))
+    is_kobo = fd.is_kobo
     written = 0
     for ent, rows in groups.items():
+        value: float | int
         if fd.agg == "count":
-            value = float(len(rows))
+            value = len(rows) if is_kobo else float(len(rows))
         else:
             vals = []
             for ts, rec in rows:
                 v = rec.get(fd.value_field) if fd.value_field else None
-                if isinstance(v, (int, float)):
+                if v is None:
+                    continue
+                if is_kobo:
+                    # int64 kobo: reject floats (precision loss) and bools
+                    if isinstance(v, bool) or not isinstance(v, int):
+                        raise HTTPException(
+                            422, f"kobo feature {fd.name}: value for entity {ent} is "
+                                 f"{type(v).__name__}, must be int (int64 kobo)")
+                    vals.append((ts, v))
+                elif isinstance(v, (int, float)):
                     vals.append((ts, float(v)))
             if not vals:
                 continue
@@ -92,7 +128,8 @@ def _materialise(fd: FeatureDef, records: list[dict]) -> dict:
             if fd.agg == "sum":
                 value = sum(nums)
             elif fd.agg == "avg":
-                value = sum(nums) / len(nums)
+                # kobo avg: integer floor division keeps exact int64 semantics
+                value = sum(nums) // len(nums) if is_kobo else sum(nums) / len(nums)
             elif fd.agg == "min":
                 value = min(nums)
             elif fd.agg == "max":
@@ -100,17 +137,25 @@ def _materialise(fd: FeatureDef, records: list[dict]) -> dict:
             else:  # last: latest by ts
                 value = max(vals, key=lambda x: x[0])[1]
         with _lock:
-            _db.execute(
-                "INSERT INTO feature_values (entity, name, value, ts) VALUES (?,?,?,?)",
-                [ent, fd.name, value, now])
+            if is_kobo:
+                _db.execute(
+                    "INSERT INTO feature_values (entity, name, value_kobo, ts) VALUES (?,?,?,?)",
+                    [ent, fd.name, int(value), now])
+            else:
+                _db.execute(
+                    "INSERT INTO feature_values (entity, name, value, ts) VALUES (?,?,?,?)",
+                    [ent, fd.name, float(value), now])
+            col = "value_kobo" if is_kobo else "value"
             latest = _db.execute(
-                "SELECT value, ts FROM feature_values WHERE entity=? AND name=? "
+                f"SELECT {col}, ts FROM feature_values WHERE entity=? AND name=? "
                 "ORDER BY ts DESC LIMIT 1", [ent, fd.name]).fetchone()
         if latest:
-            _online.put("online", f"{ent}:{fd.name}",
-                        {"entity": ent, "name": fd.name, "value": latest[0], "ts": latest[1]})
+            payload = {"entity": ent, "name": fd.name, "ts": latest[1],
+                       ("value_kobo" if is_kobo else "value"): latest[0]}
+            _online.put("online", f"{ent}:{fd.name}", payload)
         written += 1
-    return {"feature": fd.name, "entities_written": written, "agg": fd.agg}
+    return {"feature": fd.name, "entities_written": written, "agg": fd.agg,
+            "kobo": is_kobo}
 
 
 @app.get("/healthz")
@@ -159,7 +204,8 @@ def batch(req: BatchRequest, claims: Claims = Depends(fastapi_dependency())) -> 
             row: dict[str, float | None] = {}
             for feat in req.features:
                 r = _db.execute(
-                    "SELECT value FROM feature_values WHERE entity=? AND name=? "
+                    "SELECT COALESCE(value, value_kobo) FROM feature_values "
+                    "WHERE entity=? AND name=? "
                     "ORDER BY ts DESC LIMIT 1", [ent, feat]).fetchone()
                 row[feat] = r[0] if r else None
             out[ent] = row

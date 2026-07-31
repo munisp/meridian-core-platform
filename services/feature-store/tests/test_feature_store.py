@@ -21,20 +21,37 @@ def test_materialise_and_online():
         assert r.status_code == 200, r.text
         assert r.json()["entities_written"] == 2
         r = c.get("/v1/features/online/p1/fv_filing_divergence_30d", headers=H)
-        assert r.json()["value"] == 400.0
+        # kobo features are int64 (A9): integer payload, never float64
+        assert r.json()["value_kobo"] == 400 and isinstance(r.json()["value_kobo"], int)
         # last agg
         c.post("/v1/features/materialise", headers=H, json={
             "feature": {"name": "fv_last_div", "entity_key": "pseudo_tin",
                         "value_field": "divergence_kobo", "agg": "last"},
             "source_records": recs})
         r = c.get("/v1/features/online/p1/fv_last_div", headers=H)
-        assert r.json()["value"] == 300.0  # latest ts
+        assert r.json()["value_kobo"] == 300  # latest ts
         # batch
         r = c.post("/v1/features/batch", headers=H, json={
             "entities": ["p1", "p2", "p3"], "features": ["fv_filing_divergence_30d"]})
         feats = r.json()["features"]
-        assert feats["p1"]["fv_filing_divergence_30d"] == 400.0
+        assert feats["p1"]["fv_filing_divergence_30d"] == 400
         assert feats["p3"]["fv_filing_divergence_30d"] is None
+        # kobo float rejection (A9): floats in _kobo fields are refused
+        r = c.post("/v1/features/materialise", headers=H, json={
+            "feature": {"name": "fv_bad", "entity_key": "pseudo_tin",
+                        "value_field": "divergence_kobo", "agg": "sum"},
+            "source_records": [{"pseudo_tin": "p1", "divergence_kobo": 1.5, "ts": 3000}]})
+        assert r.status_code == 422
+        assert r.headers["content-type"].startswith("application/problem+json")
+        # non-kobo feature still uses double column
+        r = c.post("/v1/features/materialise", headers=H, json={
+            "feature": {"name": "fv_ratio", "entity_key": "pseudo_tin",
+                        "value_field": "ratio", "agg": "avg"},
+            "source_records": [{"pseudo_tin": "p1", "ratio": 0.5, "ts": 1000},
+                               {"pseudo_tin": "p1", "ratio": 1.5, "ts": 1001}]})
+        assert r.status_code == 200 and r.json()["kobo"] is False
+        r = c.get("/v1/features/online/p1/fv_ratio", headers=H)
+        assert r.json()["value"] == 1.0
         # count + window
         r = c.post("/v1/features/materialise", headers=H, json={
             "feature": {"name": "fv_cnt", "entity_key": "pseudo_tin", "agg": "count"},

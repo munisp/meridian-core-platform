@@ -1,0 +1,10 @@
+{
+  "keys": {
+    "meridian-ceremony-dev-001": {
+      "algorithm": "ed25519",
+      "public_key_hex": "2c134662ef09e22de4287acb5cbf1310b00bc46b46a72106378bef6c9fd635db",
+      "trust": "seed-dev",
+      "note": "[seed] dev ceremony key committed so integrity paths are exercisable; prod keys are held by the offline ceremony and distributed out-of-band."
+    }
+  }
+}

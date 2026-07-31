@@ -66,10 +66,10 @@ func seedTenantsUsers(s *Store) {
 	s.Tenants["t-acme-bank"] = &Tenant{ID: "t-acme-bank", Name: "Acme Merchant Bank (PSP)", Slug: "acme-bank", Isolation: "row", Status: "active", ContactMail: "integration@acmebank.ng", CreatedAt: "2025-04-18T14:45:00Z"}
 	s.Tenants["t-northern-retail"] = &Tenant{ID: "t-northern-retail", Name: "Northern Retail Cooperative", Slug: "northern-retail", Isolation: "row", Status: "suspended", ContactMail: "ops@northernretail.ng", CreatedAt: "2025-05-30T11:05:00Z", Notes: "Suspended pending KYC refresh."}
 
-	s.Users["admin@meridian.local"] = &User{ID: "u-admin", Email: "admin@meridian.local", Name: "Platform Administrator", Roles: []string{"admin", "board"}, TenantID: "t-nrs-sovereign", Status: "active", CreatedAt: "2025-01-05T09:00:00Z", Password: "admin123"}
-	s.Users["operator@meridian.local"] = &User{ID: "u-operator", Email: "operator@meridian.local", Name: "Console Operator", Roles: []string{"operator"}, TenantID: "t-nrs-sovereign", Status: "active", CreatedAt: "2025-01-06T09:00:00Z", Password: "operator123"}
-	s.Users["auditor@meridian.local"] = &User{ID: "u-auditor", Email: "auditor@meridian.local", Name: "Independent Auditor", Roles: []string{"auditor"}, TenantID: "t-nrs-sovereign", Status: "active", CreatedAt: "2025-01-06T09:30:00Z", Password: "auditor123"}
-	s.Users["amina@chambers.ng"] = &User{ID: "u-amina", Email: "amina@chambers.ng", Name: "Amina Bello (Practitioner)", Roles: []string{"operator"}, TenantID: "t-acme-bank", Status: "active", CreatedAt: "2025-04-20T10:00:00Z", Password: "changeme123"}
+	s.Users["admin@meridian.local"] = &User{ID: "u-admin", Email: "admin@meridian.local", Name: "Platform Administrator", Roles: []string{"admin", "board"}, TenantID: "t-nrs-sovereign", Status: "active", CreatedAt: "2025-01-05T09:00:00Z", PasswordHash: MustHashPassword("admin123")}
+	s.Users["operator@meridian.local"] = &User{ID: "u-operator", Email: "operator@meridian.local", Name: "Console Operator", Roles: []string{"operator"}, TenantID: "t-nrs-sovereign", Status: "active", CreatedAt: "2025-01-06T09:00:00Z", PasswordHash: MustHashPassword("operator123")}
+	s.Users["auditor@meridian.local"] = &User{ID: "u-auditor", Email: "auditor@meridian.local", Name: "Independent Auditor", Roles: []string{"auditor"}, TenantID: "t-nrs-sovereign", Status: "active", CreatedAt: "2025-01-06T09:30:00Z", PasswordHash: MustHashPassword("auditor123")}
+	s.Users["amina@chambers.ng"] = &User{ID: "u-amina", Email: "amina@chambers.ng", Name: "Amina Bello (Practitioner)", Roles: []string{"operator"}, TenantID: "t-acme-bank", Status: "active", CreatedAt: "2025-04-20T10:00:00Z", PasswordHash: MustHashPassword("changeme123")}
 
 	s.Relations = []Relation{
 		{Object: "matter:lagos-v-abc-holdings", Relation: "counsel", Subject: "user:amina@chambers.ng", Plane: "compliance"},

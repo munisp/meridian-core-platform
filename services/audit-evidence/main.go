@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
@@ -18,17 +19,33 @@ const (
 )
 
 type server struct {
-	al *evidence.AuditLog
-	ws *evidence.WormStore
+	al      *evidence.AuditLog
+	ws      *evidence.WormStore
+	sealKey string
 }
 
 func main() {
 	dir := httpx.Env("DATA_DIR", "./data")
+	// A5: dedicated seal/chain keys. PROFILE=prod REQUIRES TAT_SEAL_KEY —
+	// no dev-secret default in prod (fail closed at startup).
+	profile := httpx.Env("PROFILE", "dev")
+	sealKey := os.Getenv("TAT_SEAL_KEY")
+	if sealKey == "" {
+		if profile == "prod" {
+			log.Fatal("profile=prod FATAL: TAT_SEAL_KEY is required (dedicated ceremony key; no dev-secret default)")
+		}
+		sealKey = "dev-tat-seal-key-change-me"
+		log.Printf("profile=dev component=audit-evidence WARNING: TAT_SEAL_KEY unset, using dev seal key")
+	}
+	chainKey := os.Getenv("TAT_CHAIN_HMAC_KEY")
+	if chainKey == "" {
+		chainKey = sealKey // chain HMAC key derives from the seal key by default
+	}
 	st, err := store.OpenFromEnv(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	al, err := evidence.OpenAuditLog(dir)
+	al, err := evidence.OpenAuditLog(dir, []byte(chainKey))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -36,7 +53,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &server{al: al, ws: ws}
+	s := &server{al: al, ws: ws, sealKey: sealKey}
 
 	mux := http.NewServeMux()
 	httpx.RegisterStandard(mux, service, version, nil)
@@ -190,8 +207,8 @@ func (s *server) assembleTAT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, _ := auth.FromContext(r.Context())
-	key := httpx.Env("MERIDIAN_DEV_JWT_SECRET", "meridian-dev-secret-change-me")
-	tat, err := evidence.AssembleTAT(s.al, s.ws, req.Subject, req.From, req.To, claims.Sub, key)
+	// A5: dedicated TAT seal key (never the shared dev JWT secret).
+	tat, err := evidence.AssembleTAT(s.al, s.ws, req.Subject, req.From, req.To, claims.Sub, s.sealKey)
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return

@@ -1,0 +1,31 @@
+# [seed] rp-vat-rates — VAT standard rate with the 5% -> 7.5% transition.
+# Finance Act 2019 raised the standard VAT rate from 5% to 7.5% with
+# commencement 2020-02-01. Rate selection is by the supply/filing date
+# (context.filing_date, ISO yyyy-mm-dd).
+id: rp-vat-rates
+version: 1.0.0
+effective_from: 2020-02-01
+effective_to: null
+status: published
+subject_to_regazette: true
+provenance:
+  as_passed: "Finance Act 2019 (VAT rate amendment to 7.5%), as passed"
+  as_gazetted: null
+  source_citation: "Finance Act 2019, s.34 (amendment of s.4 VAT Act); VAT Act Cap V1 LFN 2004 (as amended)"
+signed:
+  algorithm: ed25519
+  key_id: meridian-ceremony-dev-001
+  signature: 0734ada20d1019c64d05b001bd8210ea72026738632675b7de5d5ab363729a2080825f8b34b8e9aaf94a7a6f7a2b3c9022fe292034c06a00a6bddf874f14c309
+rules:
+  - id: vat.rate.standard.2020
+    description: "Standard rate 7.5% for supplies on/after 2020-02-01"
+    when: { supply_type: standard, filing_date: { gte: "2020-02-01" } }
+    then: { rate_bps: 750, narrate: "VAT 7.5% standard rate (Finance Act 2019, from 2020-02-01)" }
+  - id: vat.rate.standard.legacy
+    description: "Legacy 5% standard rate for supplies before 2020-02-01"
+    when: { supply_type: standard, filing_date: { lt: "2020-02-01" } }
+    then: { rate_bps: 500, narrate: "VAT 5% standard rate (pre-Finance Act 2019 window)" }
+  - id: vat.rate.default.standard
+    description: "No filing_date supplied: apply the current standard rate"
+    when: { supply_type: standard, filing_date: { exists: false } }
+    then: { rate_bps: 750, narrate: "VAT 7.5% standard rate (current; no filing_date in context)" }

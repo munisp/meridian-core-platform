@@ -21,8 +21,10 @@ type User struct {
 	TenantID  string   `json:"tenant_id"`
 	Status    string   `json:"status"` // active | disabled
 	CreatedAt string   `json:"created_at"`
-	// Password is dev-only, never serialised
+	// Password is accepted on create/update only, never stored or serialised.
 	Password string `json:"-"`
+	// PasswordHash is the PBKDF2-SHA256 encoded hash (A6), never serialised.
+	PasswordHash string `json:"-"`
 }
 
 type Relation struct {

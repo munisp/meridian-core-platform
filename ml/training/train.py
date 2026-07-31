@@ -31,6 +31,13 @@ from ml.models import mcmc  # noqa: E402
 from ml.registry import registry  # noqa: E402
 from ml.training.common import auc, load_frame, pr_auc, recall_at_k, split_by_time, standardize, xy  # noqa: E402
 
+# GUARD (training/serving skew): features are computed strictly from
+# transaction windows that CLOSE BEFORE the label event (see
+# ml/data/synthetic time-based split in training/common.split_by_time).
+# Point-in-time-correct joins against the feature-store are a TODO there
+# (services/feature-store/app/main.py); until then, do NOT materialise
+# training features with latest-wins online reads — always recompute from
+# windowed raw records as done here.
 DEVICE = "cpu"
 METRICS_PATH = Path(__file__).resolve().parents[1] / "registry" / "metrics.json"
 

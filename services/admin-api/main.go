@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ type app struct {
 	client    *http.Client // downstream calls, short timeout
 	jwtSecret string
 	authMode  string
+	pg        *pgUsers // non-nil when DATABASE_URL is configured (A6)
 }
 
 func envOr(key, def string) string {
@@ -29,6 +31,20 @@ func main() {
 		client:    &http.Client{Timeout: 1200 * time.Millisecond},
 		jwtSecret: envOr("MERIDIAN_DEV_JWT_SECRET", "meridian-dev-secret-change-me"),
 		authMode:  envOr("AUTH_MODE", "dev"),
+	}
+	// A6: Postgres-backed user persistence when DATABASE_URL is set.
+	if pg, err := openPgUsers(); err != nil {
+		// prod must not silently degrade to in-mem user state
+		if a.authMode != "dev" {
+			log.Fatalf("component=admin-api FATAL: DATABASE_URL set but Postgres connect failed (%v); failing closed", err)
+		}
+		log.Printf("component=admin-api postgres unavailable (%v); dev in-mem fallback", err)
+	} else if pg != nil {
+		a.pg = pg
+		defer pg.conn.Close(context.Background())
+		if _, err := pg.hydrate(a.store); err != nil {
+			log.Fatalf("component=admin-api FATAL: postgres hydrate failed (%v)", err)
+		}
 	}
 	// apply env URL overrides to the service registry
 	a.store.mu.Lock()

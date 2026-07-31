@@ -20,12 +20,14 @@ func (a *app) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	a.store.mu.Lock()
 	u, ok := a.store.Users[req.Email]
-	pw := ""
+	hash := ""
 	if ok {
-		pw = u.Password
+		hash = u.PasswordHash
 	}
 	a.store.mu.Unlock()
-	if !ok || u.Status != "active" || pw == "" || pw != req.Password {
+	// A6: PBKDF2-SHA256 verification (constant-time); plaintext is never
+	// stored or compared.
+	if !ok || u.Status != "active" || hash == "" || !VerifyPassword(hash, req.Password) {
 		writeProblem(w, http.StatusUnauthorized, "invalid credentials", "email or password incorrect")
 		return
 	}
@@ -244,8 +246,11 @@ func (a *app) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	if u.Password == "" {
 		u.Password = "changeme123"
 	}
+	u.PasswordHash = MustHashPassword(u.Password)
+	u.Password = "" // never retain plaintext
 	u.CreatedAt = nowRFC3339()
 	a.store.Users[u.Email] = &u
+	a.upsertUserPg(&u)
 	a.store.mu.Unlock()
 	a.appendAudit("user.created", "user:"+u.Email, actorOf(r), "create", u.Name)
 	writeJSON(w, http.StatusCreated, &u)
@@ -278,8 +283,11 @@ func (a *app) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 			target.TenantID = in.TenantID
 		}
 		if in.Password != "" {
-			target.Password = in.Password
+			target.PasswordHash = MustHashPassword(in.Password)
 		}
+	}
+	if target != nil {
+		a.upsertUserPg(target)
 	}
 	a.store.mu.Unlock()
 	if target == nil {

@@ -108,14 +108,26 @@ func Middleware(next http.Handler) http.Handler {
 	mode := httpx.Env("AUTH_MODE", "dev")
 	if mode == "keycloak" {
 		if _, err := SharedKeycloakVerifier(); err != nil {
-			httpx.ProfileLog("auth", "dev", "AUTH_MODE=keycloak but verifier misconfigured (%v); dev fallback active", err)
-		} else {
-			httpx.ProfileLog("auth", "prod", "Keycloak RS256/JWKS verification active")
-			return http.HandlerFunc(KeycloakMiddleware(next))
+			// FAIL CLOSED (audit: prod selector set but auth fell back to
+			// HS256 + X-Dev-Role => full bypass). Deny every request rather
+			// than honouring dev credentials in prod mode.
+			httpx.ProfileLog("auth", "prod", "AUTH_MODE=keycloak but verifier misconfigured (%v); FAILING CLOSED — all requests denied until Keycloak is configured", err)
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				httpx.Errorf(w, http.StatusServiceUnavailable, "auth misconfigured",
+					"AUTH_MODE=keycloak but the Keycloak verifier is not configured; refusing all requests (fail closed)")
+			})
 		}
-	} else {
-		httpx.ProfileLog("auth", "dev", "HS256 + X-Dev-Role accepted")
+		httpx.ProfileLog("auth", "prod", "Keycloak RS256/JWKS verification active")
+		return http.HandlerFunc(KeycloakMiddleware(next))
 	}
+	if mode != "dev" {
+		httpx.ProfileLog("auth", "prod", "unknown AUTH_MODE=%q; FAILING CLOSED", mode)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			httpx.Errorf(w, http.StatusServiceUnavailable, "auth misconfigured",
+				"unsupported AUTH_MODE %q; refusing all requests (fail closed)", mode)
+		})
+	}
+	httpx.ProfileLog("auth", "dev", "HS256 + X-Dev-Role accepted")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var claims Claims
 		authz := r.Header.Get("Authorization")

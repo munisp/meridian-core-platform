@@ -1,0 +1,46 @@
+# [seed] Dev sample of rp-wht-2024 for standalone rules-engine runs/tests.
+# Canonical packs live in the meridian-rule-packs repo.
+id: rp-wht-2024
+version: 1.0.0
+effective_from: 2025-01-01
+effective_to: null
+status: published
+subject_to_regazette: true
+provenance:
+  as_passed: "Deduction of Tax at Source (Withholding) Regulations 2024, as passed"
+  as_gazetted: null
+  source_citation: "Deduction of Tax at Source (WHT) Regulations 2024"
+signed:
+  algorithm: ed25519
+  key_id: meridian-ceremony-dev-001
+  signature: 9f24cbd98bab13e42078b2dacbc0afd69973653d3e972820ee9e38698ad4056b34e54643c21e76bb7d71f30528305d11646c5696f438586ade74370d98cd7200
+rules:
+  - id: wht.carveout.smallco
+    description: "Section: small companies (<= N2m fee base, no TIN exempt) carve-out"
+    when: { beneficiary: small_company, annual_turnover_kobo: { lte: 200000000 } }
+    then: { decision: exempt, narrate: "Small-company carve-out (<= N2m): no WHT" }
+  - id: wht.rate.dividend.company
+    when: { payment_type: dividend, beneficiary: company }
+    then: { rate_bps: 1000, narrate: "WHT 10% on dividends to companies" }
+  - id: wht.rate.dividend.individual
+    when: { payment_type: dividend, beneficiary: individual }
+    then: { rate_bps: 1000, narrate: "WHT 10% on dividends to individuals" }
+  - id: wht.rate.interest
+    when: { payment_type: interest }
+    then: { rate_bps: 1000, narrate: "WHT 10% on interest" }
+  - id: wht.rate.royalty
+    when: { payment_type: royalty }
+    then: { rate_bps: 1000, narrate: "WHT 10% on royalties" }
+  - id: wht.rate.services.notin
+    description: "No-TIN double rate"
+    when: { payment_type: [services, goods], has_tin: false }
+    then: { rate_bps: 1000, narrate: "Double rate 10%: recipient has no TIN" }
+  - id: wht.rate.services
+    when: { payment_type: services }
+    then: { rate_bps: 500, narrate: "WHT 5% on services" }
+  - id: wht.rate.goods
+    when: { payment_type: goods }
+    then: { rate_bps: 200, narrate: "WHT 2% on goods" }
+  - id: wht.exempt.direct-debit
+    when: { payment_channel: direct_debit }
+    then: { decision: exempt, narrate: "Direct-debit exemption" }
