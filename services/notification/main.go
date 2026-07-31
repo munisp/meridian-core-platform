@@ -90,6 +90,7 @@ func (l *LogSimulator) Send(m Message) SendResult {
 type server struct {
 	st        store.DocStore
 	providers []Provider
+	orch      *orchestrator // I4 fallback chain
 }
 
 func (s *server) providerFor(channel string) Provider {
@@ -113,10 +114,13 @@ func main() {
 		log.Fatal(err)
 	}
 	s := &server{st: st, providers: []Provider{NewLogSimulator(filepath.Join(dir, "notifications.log"))}}
+	s.orch = newOrchestrator(s.providers)
 
 	mux := http.NewServeMux()
 	httpx.RegisterStandard(mux, service, version, nil)
 	mux.HandleFunc("POST /v1/send", s.send)
+	mux.HandleFunc("POST /v1/notify", s.notify) // I4: fallback chain
+	mux.HandleFunc("GET /v1/receipts/{id}", s.receipts)
 	mux.HandleFunc("GET /v1/status/{id}", s.status)
 	mux.HandleFunc("GET /v1/providers", func(w http.ResponseWriter, r *http.Request) {
 		names := []string{}
@@ -214,6 +218,84 @@ func (s *server) send(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusBadGateway
 	}
 	httpx.JSON(w, status, map[string]any{"message": msg})
+}
+
+// notify — I4: POST /v1/notify {to, template_id, params, chain?,
+// idempotency_key} walks the fallback chain (sms->ussd->email->agent) with
+// per-channel templates, retry/backoff, and persisted delivery receipts.
+func (s *server) notify(w http.ResponseWriter, r *http.Request) {
+	var req notifyReq
+	if err := httpx.Decode(r, &req); err != nil {
+		httpx.BadRequest(w, "invalid JSON: %v", err)
+		return
+	}
+	if req.To == "" || req.TemplateID == "" {
+		httpx.BadRequest(w, "to and template_id are required")
+		return
+	}
+	if req.IdempotencyKey != "" {
+		var existing Message
+		if err := s.st.Get("by_key", "notify:"+req.IdempotencyKey, &existing); err == nil {
+			httpx.JSON(w, http.StatusOK, map[string]any{"message": existing, "note": "idempotent replay"})
+			return
+		}
+	}
+	chain := req.Chain
+	if len(chain) == 0 {
+		chain = defaultChain
+	}
+	for _, ch := range chain {
+		if !channels[ch] && ch != "agent" {
+			httpx.BadRequest(w, "chain entries must be sms|ussd|email|push|agent")
+			return
+		}
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	msg := Message{
+		ID: "msg-" + envelope.NewULID(), To: req.To, TemplateID: req.TemplateID,
+		Params: req.Params, IdempotencyKey: req.IdempotencyKey,
+		Status: "queued", CreatedAt: now, UpdatedAt: now,
+	}
+	render := func(channel string) (string, error) {
+		return renderTemplate(req.TemplateID, channel, req.Params)
+	}
+	msg, receipts := s.orch.run(msg, chain, render)
+	if err := s.st.Put("messages", msg.ID, msg); err != nil {
+		httpx.Internal(w, "%v", err)
+		return
+	}
+	for _, rc := range receipts {
+		rc.ID = "drcpt-" + envelope.NewULID()
+		if err := s.st.Put("receipts", rc.ID, rc); err != nil {
+			httpx.Internal(w, "%v", err)
+			return
+		}
+	}
+	if req.IdempotencyKey != "" {
+		_ = s.st.Put("by_key", "notify:"+req.IdempotencyKey, msg)
+	}
+	status := http.StatusAccepted
+	if msg.Status == "failed" {
+		status = http.StatusBadGateway
+	}
+	httpx.JSON(w, status, map[string]any{"message": msg, "attempts": len(receipts), "chain": chain})
+}
+
+// receipts — I4: GET /v1/receipts/{message_id} lists delivery receipts.
+func (s *server) receipts(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var all []DeliveryReceipt
+	if err := s.st.ListInto("receipts", &all); err != nil {
+		httpx.Internal(w, "%v", err)
+		return
+	}
+	out := []DeliveryReceipt{}
+	for _, rc := range all {
+		if rc.MessageID == id {
+			out = append(out, rc)
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"receipts": out, "count": len(out)})
 }
 
 func (s *server) status(w http.ResponseWriter, r *http.Request) {
