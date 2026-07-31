@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/bus"
@@ -95,6 +97,14 @@ func main() {
 	relay := outbox.Relay{Store: ob, Bus: b, Dir: filepath.Join(dir, "outbox")}
 	go relay.Run(ctx)
 
+	// F7: pending-expiry sweeper — voids unresolved pending transfers past
+	// their timeout and emits nrs.ledger.pending_expired.v1 per expiry.
+	// (Prod: TigerBeetle enforces pending timeouts natively on the cluster;
+	// this sweeper covers the dev DevClient.)
+	if dev != nil {
+		go srv.runPendingSweeper(ctx)
+	}
+
 	handler := auth.Middleware(srv.routes())
 	addr := ":" + httpx.Port("8010")
 	log.Printf("%s %s (DATA_DIR=%s, EVENT_BUS=%s)", service, version, dir, httpx.Env("EVENT_BUS", "inproc"))
@@ -118,6 +128,54 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /v1/transfers/{id}/void", auth.RequireRole("ledger:post", s.voidPending))
 	mux.HandleFunc("GET /v1/transfers", s.listTransfers)
 	return mux
+}
+
+// runPendingSweeper voids expired pending transfers on an interval
+// runPendingSweeper voids expired pending transfers on an interval
+// (LEDGER_SWEEP_INTERVAL_SECONDS, default 30s) and emits
+// nrs.ledger.pending_expired.v1 for each. Boot-time pass included so
+// pendings that expired while the service was down are released.
+func (s *server) runPendingSweeper(ctx context.Context) {
+	s.sweepExpiredPendings()
+	secs, _ := strconv.Atoi(httpx.Env("LEDGER_SWEEP_INTERVAL_SECONDS", "30"))
+	if secs <= 0 {
+		secs = 30
+	}
+	interval := time.Duration(secs) * time.Second
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			s.sweepExpiredPendings()
+		}
+	}
+}
+
+func (s *server) sweepExpiredPendings() {
+	expired := s.dev.ExpirePendings(time.Now().UTC())
+	for _, t := range expired {
+		env, err := envelope.New("nrs.ledger.pending_expired.v1", service, "", "", map[string]any{
+			"transfer_id":       t.ID.String(),
+			"debit_account_id":  t.DebitAccountID.String(),
+			"credit_account_id": t.CreditAccountID.String(),
+			"amount_kobo":       t.Amount,
+			"ledger":            t.Ledger,
+			"expired_at":        t.ExpiresAt,
+		})
+		if err != nil {
+			log.Printf("pending-expiry envelope: %v", err)
+			continue
+		}
+		if err := s.out.Append("nrs.ledger.pending_expired.v1", env); err != nil {
+			log.Printf("pending-expiry outbox append: %v", err)
+		}
+	}
+	if len(expired) > 0 {
+		log.Printf("pending-expiry sweeper: voided %d expired pending transfers", len(expired))
+	}
 }
 
 func (s *server) persist() {
@@ -267,6 +325,7 @@ type transferReq struct {
 	Ledger          uint64 `json:"ledger"`
 	Code            uint16 `json:"code"`
 	UserData        string `json:"user_data,omitempty"`
+	TimeoutSeconds  uint32 `json:"timeout_seconds,omitempty"` // pending expiry (0 = no expiry)
 }
 
 func randomID() tb.ID {
@@ -303,6 +362,7 @@ func (s *server) buildTransfer(req transferReq) (tb.Transfer, error) {
 	t.Ledger = req.Ledger
 	t.Code = req.Code
 	t.UserData = req.UserData
+	t.TimeoutSeconds = req.TimeoutSeconds
 	return t, nil
 }
 

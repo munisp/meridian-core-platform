@@ -27,6 +27,27 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 _store = open_store(DATA_DIR)
 
+# F8: transactional outbox — events are written with state changes and the
+# relay publishes at-least-once. Consumer dedup keys are documented per
+# event (see docs/funds-flow.md): revenue -> "revenue:{reference}",
+# refunds -> "refund:{refund_id}", investigations -> "case:{reference}".
+from meridian_events.bus import bus_from_env  # noqa: E402
+from meridian_events.outbox import FileOutbox, OutboxRelay  # noqa: E402
+
+_outbox = FileOutbox(DATA_DIR / "outbox")
+_bus = bus_from_env()
+_relay = OutboxRelay(_outbox, _bus, DATA_DIR / "outbox")
+
+
+@app.on_event("startup")
+def _start_relay() -> None:  # pragma: no cover
+    _relay.start()
+
+
+from .refund_execution import RefundExecutor, ledger_from_env, refund_id  # noqa: E402
+
+_executor = RefundExecutor(_store, ledger_from_env(), _outbox)
+
 
 class ReconRecord(BaseModel):
     reference: str
@@ -76,6 +97,15 @@ def _index(records: list[ReconRecord]) -> tuple[dict[str, ReconRecord], list[dic
     return out, dups
 
 
+def _fee_accounted(present: dict[str, ReconRecord]) -> bool:
+    """True when platform gross == pssp net + declared fee and treasury ==
+    pssp net (F6: the fee-leg accounting path makes this the expected
+    shape, so recon balances by construction)."""
+    plat, pssp, tre = present["platform"], present["pssp"], present["treasury"]
+    fee = int((pssp.meta or {}).get("fee_kobo") or 0)
+    return fee > 0 and plat.amount_kobo == pssp.amount_kobo + fee and tre.amount_kobo == pssp.amount_kobo
+
+
 def reconcile(platform: list[ReconRecord], pssp: list[ReconRecord],
               treasury: list[ReconRecord]) -> dict:
     indexed = {"platform": _index(platform), "pssp": _index(pssp), "treasury": _index(treasury)}
@@ -102,6 +132,11 @@ def reconcile(platform: list[ReconRecord], pssp: list[ReconRecord],
             continue
         amounts = {s: present[s].amount_kobo for s in SIDES}
         if len(set(amounts.values())) == 1:
+            matched.append(ref)
+        elif _fee_accounted(present):
+            # F6: PSSP settles amount - fee; with a fee ledger account the
+            # recon balances by construction: platform gross == pssp net +
+            # fee and treasury == pssp net.
             matched.append(ref)
         else:
             breaks.append({
@@ -167,13 +202,22 @@ def run_recon(req: ReconRunRequest, claims: Claims = Depends(fastapi_dependency(
 
 def _emit_revenue_events(run_id: str, req: ReconRunRequest, matched: set[str]) -> int:
     """Persist OpenSearch-dashboard-ready revenue documents for matched
-    settlement references. Docs are flat, timestamped, integer-kobo."""
+    settlement references. Docs are flat, timestamped, integer-kobo.
+
+    F9: revenue is recognised ONCE per reference, globally — a re-submitted
+    reference in a later run must not double-count revenue. The
+    recognised_references collection is the dedup set (key = reference)."""
     by_ref = {r.reference: r for r in req.platform}
     n = 0
     for ref in sorted(matched):
         rec = by_ref.get(ref)
         if rec is None:
             continue
+        if _store.get("recognised_references", ref) is not None:
+            continue  # already recognised in a prior run: no double-count
+        _store.put("recognised_references", ref,
+                   {"reference": ref, "first_run_id": run_id,
+                    "recognised_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         doc = {
             "type": "nrs.revenue.settled.v1",
             "@timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -228,29 +272,86 @@ class FastTrackRequest(BaseModel):
     filings_total: int = Field(default=0, ge=0)
     prior_breaks: int = Field(default=0, ge=0)
     tax_type: str | None = None
+    period: str | None = None  # e.g. "2026-07"; defaults to the current month
 
 
 @app.post("/v1/refunds/fasttrack")
 def refund_fasttrack(req: FastTrackRequest,
                      claims: Claims = Depends(fastapi_dependency())) -> dict:
-    """I3 (REAL): decide the refund lane from credit score + compliance
-    history with rule caps; manual-review lane emits a fallback event."""
+    """I3 + F2: decide the refund lane AND execute approved refunds.
+    auto_approve (<= ₦5m) posts via the refund workflow; manual_review is
+    queued for the manual-approve endpoint. Idempotent per
+    (tin_hash, period, tax_type): a double-submit replays one execution.
+
+    prior_breaks is read SERVER-SIDE from the breaks store — a caller can
+    no longer self-certify a clean recon history (audit Flow 2c)."""
     from .refund import decide_refund_lane
 
+    period = req.period or time.strftime("%Y-%m", time.gmtime())
+    rid = refund_id(req.tin_hash, period, req.tax_type)
+    prior = _store.get("refund_decisions", rid)
+    if prior is not None:
+        return {**prior, "idempotent_replay": True}
+    server_breaks = sum(1 for b in _store.list("breaks") if b.get("status") == "open")
     try:
         doc = decide_refund_lane(
             tin_hash=req.tin_hash, amount_kobo=req.amount_kobo,
             credit_score=req.credit_score, filings_on_time=req.filings_on_time,
-            filings_total=req.filings_total, prior_breaks=req.prior_breaks,
+            filings_total=req.filings_total, prior_breaks=server_breaks,
             tax_type=req.tax_type)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    _store.put("refund_decisions", f"{doc['decided_at']}:{req.tin_hash}", doc)
-    if doc["lane"] == "manual_review":
-        event = {"type": "nrs.refund.manual_review.v1", "decision": doc,
-                 "queued_at": doc["decided_at"]}
-        _store.put("refund_manual_review", f"{doc['decided_at']}:{req.tin_hash}", event)
+    doc["refund_id"] = rid
+    doc["period"] = period
+    doc["tin_hash"] = req.tin_hash
+    doc["tax_type"] = req.tax_type
+    _store.put("refund_decisions", rid, doc)
+    if doc["lane"] == "auto_approve":
+        try:
+            exe = _executor.execute(tin_hash=req.tin_hash, period=period,
+                                    tax_type=req.tax_type, amount_kobo=req.amount_kobo,
+                                    decision=doc, approved_by="fasttrack:auto")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(502, f"refund execution failed: {exc}") from exc
+        doc["execution"] = exe
+    elif doc["lane"] == "manual_review":
+        event = {"type": "nrs.refund.manual_review.v1", "dedup_key": f"manual_review:{rid}",
+                 "decision": doc, "queued_at": doc["decided_at"]}
+        _store.put("refund_manual_review", rid, event)
+        from meridian_events.envelope import new_envelope
+        _outbox.append("nrs.refund.manual_review.v1",
+                       new_envelope("nrs.refund.manual_review.v1", SERVICE, event))
     return doc
+
+
+@app.post("/v1/refunds/{rid}/approve")
+def refund_manual_approve(rid: str,
+                          claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
+    """Manual-approve endpoint for refunds above the ₦5m auto cap: executes
+    the SAME refund workflow after human approval (idempotent per refund)."""
+    doc = _store.get("refund_decisions", rid)
+    if doc is None:
+        raise HTTPException(404, f"refund decision {rid}")
+    if doc.get("lane") != "manual_review":
+        raise HTTPException(409, f"refund {rid} is in lane {doc.get('lane')}; manual approve not applicable")
+    try:
+        exe = _executor.execute(tin_hash=doc["tin_hash"] if "tin_hash" in doc else doc.get("tin_hash", ""),
+                                period=doc["period"], tax_type=doc.get("tax_type"),
+                                amount_kobo=doc["amount_kobo"], decision=doc,
+                                approved_by=claims.sub)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"refund execution failed: {exc}") from exc
+    doc["execution"] = exe
+    doc["approved_by"] = claims.sub
+    _store.put("refund_decisions", rid, doc)
+    return {"decision": doc, "execution": exe}
+
+
+@app.post("/v1/refunds/sweep")
+def refund_sweep(claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
+    """Recovery worker hook: resume/void refund executions interrupted by a
+    crash between the pending transfer and the post."""
+    return _executor.sweep_pending()
 
 
 @app.get("/v1/recon/breaks")
@@ -278,6 +379,160 @@ def resolve_break(break_id: str, req: ResolveRequest,
          "resolved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     _store.put("breaks", break_id, b)
     return {"break": b}
+
+
+# ---------------------------------------------------------------------------
+# F9: independent PULL-mode recon + auto-heal investigation cases
+# ---------------------------------------------------------------------------
+
+class PSSPSettlementAdapter:
+    """Pulls the PSSP settlement report INDEPENDENTLY of the caller.
+
+    Dev default: the sim adapter reads settlement records published into the
+    `pssp_settlement_report` collection (by the PSSP webhook/settlement
+    poller) and tags every record honestly (adapter="sim"). Prod selects an
+    HTTP adapter via PSSP_REPORT_URL — a caller-fed report is never trusted
+    as the PSSP side in pull mode.
+    """
+
+    def __init__(self) -> None:
+        self.mode = "http" if os.environ.get("PSSP_REPORT_URL") else "sim"
+
+    def settlement_report(self) -> list[ReconRecord]:
+        if self.mode == "http":  # pragma: no cover - requires a live PSSP
+            import urllib.request
+            url = os.environ["PSSP_REPORT_URL"].rstrip("/") + "/v1/settlements"
+            req = urllib.request.Request(url, headers={"X-Dev-Role": "operator"})
+            import json as _json
+            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+                rows = _json.loads(resp.read() or b"[]")
+            return [ReconRecord(**r) for r in rows]
+        out = []
+        for rec in _store.list("pssp_settlement_report"):
+            meta = {**(rec.get("meta") or {}), "adapter": "sim", "honest": True}
+            out.append(ReconRecord(reference=rec["reference"],
+                                   amount_kobo=int(rec["amount_kobo"]),
+                                   date=rec.get("date"), meta=meta))
+        return out
+
+
+_pssp_adapter = PSSPSettlementAdapter()
+
+AUTO_HEAL_TOLERANCE_DAYS = int(os.environ.get("RECON_AUTO_HEAL_TOLERANCE_DAYS", "7"))
+
+
+class PullRunRequest(BaseModel):
+    run_id: str | None = None
+    idempotency_key: str | None = None
+
+
+@app.post("/v1/recon/pssp/pull-run")
+def run_recon_pull(req: PullRunRequest, claims: Claims = Depends(fastapi_dependency())) -> dict:
+    """F9: independent pull-mode recon. The service fetches the PSSP side
+    itself via the adapter (sim adapter is honest-tagged) instead of
+    trusting caller-fed records; platform/treasury sides come from the
+    durably ingested collections. Auto-heal class: ledger-captured but
+    PSSP-missing within the tolerance window -> an investigation case is
+    auto-created (deduped per reference)."""
+    if req.idempotency_key:
+        prior = _store.get("idempotency", f"recon-pull:{req.idempotency_key}")
+        if prior is not None:
+            return {**prior, "idempotent_replay": True}
+    platform = [ReconRecord(**r) for r in _store.list("platform_records")]
+    treasury = [ReconRecord(**r) for r in _store.list("treasury_records")]
+    pssp = _pssp_adapter.settlement_report()
+    result = reconcile(platform, pssp, treasury)
+    run_id = req.run_id or f"pull-{int(time.time() * 1000)}"
+    run = {"run_id": run_id, "mode": "pull", "adapter": _pssp_adapter.mode,
+           "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "by": claims.sub, **{k: v for k, v in result.items() if k != "breaks"}}
+    _store.put("runs", run_id, run)
+    healed = _auto_heal(run_id, platform, result["breaks"])
+    stored = []
+    for b in result["breaks"]:
+        b = {**b, "run_id": run_id, "id": f"{run_id}:{b['reference']}:{b['kind']}"}
+        if b["id"] in {h["break_id"] for h in healed}:
+            b["status"] = "investigating"
+            b["auto_heal"] = "investigation_case_created"
+        else:
+            b["status"] = "open"
+        _store.put("breaks", b["id"], b)
+        stored.append(b)
+    emitted = _emit_revenue_events(run_id, ReconRunRequest(platform=platform),
+                                   set(result["matched_references"]))
+    out = {"run": run, "breaks": stored, "auto_healed": healed,
+           "revenue_events_emitted": emitted}
+    if req.idempotency_key:
+        _store.put("idempotency", f"recon-pull:{req.idempotency_key}", out)
+    return out
+
+
+def _auto_heal(run_id: str, platform: list[ReconRecord], breaks: list[dict]) -> list[dict]:
+    """Auto-heal class: platform/ledger shows captured but the PSSP side is
+    missing AND the capture is within the tolerance window (recent enough
+    that the PSSP report should already contain it) -> auto-create an
+    investigation case (deduped per reference)."""
+    by_ref = {r.reference: r for r in platform}
+    healed: list[dict] = []
+    for b in breaks:
+        if b.get("kind") != "missing" or b.get("missing_in") != ["pssp"]:
+            continue
+        rec = by_ref.get(b["reference"])
+        if rec is None or not _within_tolerance(rec.date):
+            continue
+        case_id = f"case:{b['reference']}"
+        if _store.get("investigation_cases", case_id) is None:
+            case = {"id": case_id, "dedup_key": case_id, "reference": b["reference"],
+                    "class": "ledger_captured_pssp_missing",
+                    "run_id": run_id, "status": "open",
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            _store.put("investigation_cases", case_id, case)
+            from meridian_events.envelope import new_envelope
+            _outbox.append("nrs.recon.investigation.v1",
+                           new_envelope("nrs.recon.investigation.v1", SERVICE, case))
+        healed.append({"break_id": f"{run_id}:{b['reference']}:{b['kind']}",
+                       "case_id": case_id})
+    return healed
+
+
+def _within_tolerance(date_str: str | None) -> bool:
+    if not date_str:
+        return True  # undated platform records are always in scope
+    try:
+        d = time.strptime(date_str[:10], "%Y-%m-%d")
+    except ValueError:
+        return True
+    age_days = (time.time() - time.mktime(d)) / 86400
+    return age_days <= AUTO_HEAL_TOLERANCE_DAYS
+
+
+class IngestRequest(BaseModel):
+    side: str  # platform|treasury|pssp_settlement_report
+    records: list[ReconRecord]
+
+
+@app.post("/v1/recon/ingest")
+def ingest_records(req: IngestRequest, claims: Claims = Depends(fastapi_dependency())) -> dict:
+    """Durable ingest for the pull-mode recon sides (platform records,
+    treasury statements, and the sim PSSP settlement report). Records are
+    keyed by reference: re-ingesting a reference upserts, never duplicates."""
+    colls = {"platform": "platform_records", "treasury": "treasury_records",
+             "pssp": "pssp_settlement_report"}
+    coll = colls.get(req.side)
+    if coll is None:
+        raise HTTPException(422, f"side must be one of {sorted(colls)}")
+    for r in req.records:
+        _store.put(coll, r.reference, r.model_dump())
+    return {"side": req.side, "ingested": len(req.records)}
+
+
+@app.get("/v1/recon/investigations")
+def list_investigations(status: str | None = None,
+                        claims: Claims = Depends(fastapi_dependency())) -> dict:
+    cases = _store.list("investigation_cases")
+    if status:
+        cases = [c for c in cases if c.get("status") == status]
+    return {"cases": cases, "count": len(cases)}
 
 
 def main() -> None:  # pragma: no cover
