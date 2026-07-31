@@ -112,39 +112,3 @@ SIMULATED (behind interfaces, per SPEC §8.3):
 
 Seed data marked `[seed]` throughout (NG state/LGA polygons, gate registry,
 identity thresholds, WHT sample pack, packs.lock.json pins).
-
-## Production profile
-
-Every real integration is env-selected; the dev fallback keeps working with
-zero config. If a prod var is unset/empty the service logs
-`profile=dev component=<name>` and uses the embedded fallback; if set it logs
-`profile=prod component=<name>` and connects to the real system. Startup never
-fails because a prod var is missing.
-
-| Var | Purpose | Default (dev) |
-|---|---|---|
-| AUTH_MODE | `dev` (HS256 + X-Dev-Role) or `keycloak` (RS256 via JWKS) | dev |
-| KEYCLOAK_ISSUER | e.g. https://keycloak:8443/realms/meridian | unset |
-| KEYCLOAK_AUDIENCE | expected `aud` (e.g. meridian-services) | unset |
-| KEYCLOAK_JWKS_URL | defaults to {issuer}/protocol/openid-connect/certs | derived |
-| MERIDIAN_DEV_JWT_SECRET | dev-mode HMAC secret | meridian-dev-secret |
-| DATABASE_URL | postgres://user:pass@host:5432/dbname (pgx/v5 / psycopg) | unset → SQLite at DATA_DIR |
-| KAFKA_BROKERS | comma list (Redpanda, franz-go) | unset → embedded bus |
-| TEMPORAL_URL | host:port of Temporal frontend | unset → inproc runner |
-| TEMPORAL_NAMESPACE | namespace | default |
-| TEMPORAL_TASK_QUEUE | task queue | meridian-core |
-| TIGERBEETLE_ADDRESSES | comma list host:port (tigerbeetle-go) | unset → in-mem ledger |
-| OPENSEARCH_URL | https://host:9200 (bulk API) | unset → local JSON index |
-| MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY / MINIO_BUCKET / MINIO_USE_SSL | WORM object store (object-lock) | unset → local WORM dir |
-| NIMC_API_URL / NIMC_API_KEY | NIMC identity adapter | unset → simulator |
-| PSSP_API_URL / PSSP_API_KEY | PSSP payment adapter | unset → simulator |
-| USSD_AGGREGATOR_URL / USSD_AGGREGATOR_KEY | USSD aggregator webhook | unset → simulator |
-| TLS_CERT_FILE / TLS_KEY_FILE | optional service TLS | unset → plain HTTP |
-
-Prod-profile implementations: `packages/events/auth/keycloak.go` (RS256 JWKS),
-`packages/events/bus/kafka.go` (franz-go), `packages/events/store/pg.go`
-(pgx/v5, idempotent DDL), `packages/temporal-sdkx/worker.go` (real Temporal
-workers), `services/ledger/internal/tb/real.go` (tigerbeetle-go),
-`services/search-indexer` (OpenSearch bulk), `services/audit-evidence`
-(MinIO WORM), and the Python mirror in `packages/events/python/meridian_events`
-(auth.py, store.py).
