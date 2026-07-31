@@ -176,17 +176,21 @@ type Object struct {
 }
 
 // WormStore persists evidence objects content-addressed under dir.
+// WormStore persists evidence objects content-addressed under dir (dev) or
+// in a MinIO object-locked bucket (prod, see minio.go).
 type WormStore struct {
-	dir string
-	st  *store.Store
+	dir     string
+	st      store.DocStore
+	backend blobBackend
 }
 
-// NewWormStore opens the WORM store.
-func NewWormStore(dir string, st *store.Store) (*WormStore, error) {
+// NewWormStore opens the WORM store (local backend; see NewWormStoreFromEnv
+// for the MINIO_* prod selection).
+func NewWormStore(dir string, st store.DocStore) (*WormStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	return &WormStore{dir: dir, st: st}, nil
+	return &WormStore{dir: dir, st: st, backend: localBackend{dir: dir}}, nil
 }
 
 var errImmutable = fmt.Errorf("worm object immutable: overwrite rejected")
@@ -205,25 +209,23 @@ func (ws *WormStore) Put(id string, content []byte, contentType string, meta map
 		return Object{}, errImmutable
 	}
 	sum := sha256.Sum256(content)
-	path := ws.dir + "/" + id + ".bin"
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, content, 0o444); err != nil {
+	sha := hex.EncodeToString(sum[:])
+	uri, err := ws.backend.Put(id+".bin", content, contentType, sha)
+	if err != nil {
 		return Object{}, err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		return Object{}, err
-	}
-	os.Chmod(path, 0o444) // read-only at the FS level too
 	obj := Object{
 		ID:          id,
-		SHA256:      hex.EncodeToString(sum[:]),
-		WormURI:     "worm://evidence/" + id,
+		SHA256:      sha,
+		WormURI:     uri,
 		ContentType: contentType,
 		Size:        len(content),
 		Metadata:    meta,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 		Immutable:   true,
-		StoragePath: path,
+	}
+	if _, local := ws.backend.(localBackend); local {
+		obj.StoragePath = ws.dir + "/" + id + ".bin"
 	}
 	if err := ws.st.Put("evidence", id, obj); err != nil {
 		return Object{}, err
@@ -237,13 +239,15 @@ func (ws *WormStore) Get(id string) (Object, error) {
 	if err := ws.st.Get("evidence", id, &obj); err != nil {
 		return Object{}, err
 	}
-	obj.StoragePath = ws.dir + "/" + id + ".bin"
+	if _, local := ws.backend.(localBackend); local {
+		obj.StoragePath = ws.dir + "/" + id + ".bin"
+	}
 	return obj, nil
 }
 
 // Content reads the object bytes.
 func (ws *WormStore) Content(id string) ([]byte, error) {
-	return os.ReadFile(ws.dir + "/" + id + ".bin")
+	return ws.backend.Get(id + ".bin")
 }
 
 // Verify recomputes the sha256 of the stored content.

@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from meridian_events.auth import Claims, fastapi_dependency
-from meridian_events.store import JsonStore
+from meridian_events.store import open_store
 
 SERVICE = "feature-store"
 VERSION = "0.1.0"
@@ -34,7 +34,7 @@ with _lock:
             value DOUBLE, value_text TEXT, ts DOUBLE NOT NULL,
             PRIMARY KEY (entity, name, ts))
     """)
-_online = JsonStore(DATA_DIR / "online")
+_online = open_store(DATA_DIR / "online")
 
 AGGS = {"last", "sum", "count", "avg", "min", "max"}
 

@@ -106,6 +106,16 @@ var devRoles = map[string]bool{"admin": true, "operator": true, "auditor": true,
 // and /readyz which should be registered before wrapping.
 func Middleware(next http.Handler) http.Handler {
 	mode := httpx.Env("AUTH_MODE", "dev")
+	if mode == "keycloak" {
+		if _, err := SharedKeycloakVerifier(); err != nil {
+			httpx.ProfileLog("auth", "dev", "AUTH_MODE=keycloak but verifier misconfigured (%v); dev fallback active", err)
+		} else {
+			httpx.ProfileLog("auth", "prod", "Keycloak RS256/JWKS verification active")
+			return http.HandlerFunc(KeycloakMiddleware(next))
+		}
+	} else {
+		httpx.ProfileLog("auth", "dev", "HS256 + X-Dev-Role accepted")
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var claims Claims
 		authz := r.Header.Get("Authorization")

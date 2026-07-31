@@ -1,0 +1,3 @@
+# meridian-events python package prod-profile deps
+PyJWT[crypto]>=2.8   # AUTH_MODE=keycloak
+psycopg[binary]>=3.1 # DATABASE_URL Postgres

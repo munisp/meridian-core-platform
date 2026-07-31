@@ -83,6 +83,75 @@ def verify_hs256(token: str) -> Claims:
 
 DEV_ROLES = {"admin", "operator", "auditor", "board"}
 
+# --- Keycloak OIDC (AUTH_MODE=keycloak; HARDENING H2) ---
+#
+# RS256 verification against the realm JWKS via PyJWT[crypto] + PyJWKClient
+# (PyJWKClient caches the key set and refetches on unknown kid), validating
+# iss/exp/aud and mapping realm_access.roles -> Claims.roles.
+_KEYCLOAK_JWKS_CLIENT = None
+
+
+def _keycloak_jwks_client():
+    global _KEYCLOAK_JWKS_CLIENT
+    if _KEYCLOAK_JWKS_CLIENT is not None:
+        return _KEYCLOAK_JWKS_CLIENT
+    issuer = os.environ.get("KEYCLOAK_ISSUER", "").rstrip("/")
+    jwks_url = os.environ.get("KEYCLOAK_JWKS_URL") or (
+        f"{issuer}/protocol/openid-connect/certs" if issuer else "")
+    if not jwks_url:
+        raise AuthError("KEYCLOAK_ISSUER or KEYCLOAK_JWKS_URL required")
+    try:
+        from jwt import PyJWKClient  # PyJWT[crypto]
+    except ImportError as exc:
+        raise AuthError("PyJWT[crypto] required for AUTH_MODE=keycloak") from exc
+    _KEYCLOAK_JWKS_CLIENT = PyJWKClient(jwks_url, cache_keys=True, lifespan=300)
+    return _KEYCLOAK_JWKS_CLIENT
+
+
+def verify_keycloak(token: str) -> Claims:
+    """Verify an RS256 Keycloak JWT (iss/exp/aud + realm role mapping)."""
+    import jwt  # PyJWT[crypto]
+
+    issuer = os.environ.get("KEYCLOAK_ISSUER", "").rstrip("/") or None
+    audience = os.environ.get("KEYCLOAK_AUDIENCE") or None
+    try:
+        signing_key = _keycloak_jwks_client().get_signing_key_from_jwt(token)
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=audience,
+            issuer=issuer,
+            options={
+                "require": ["exp", "sub"],
+                "verify_aud": audience is not None,
+                "verify_iss": issuer is not None,
+            },
+        )
+    except AuthError:
+        raise
+    except Exception as exc:  # jwt.PyJWTError and friends
+        raise AuthError(str(exc)) from exc
+    roles = list(payload.get("roles") or [])
+    if not roles:
+        roles += list((payload.get("realm_access") or {}).get("roles") or [])
+        if audience:
+            ra = (payload.get("resource_access") or {}).get(audience) or {}
+            roles += list(ra.get("roles") or [])
+    return Claims(
+        sub=payload.get("sub", ""),
+        roles=sorted(set(r for r in roles if r)),
+        tenant_id=payload.get("tenant_id", ""),
+        exp=int(payload.get("exp", 0)),
+        iat=int(payload.get("iat", 0)),
+    )
+
+
+def _verify_bearer(token: str) -> Claims:
+    if os.environ.get("AUTH_MODE", "dev") == "keycloak":
+        return verify_keycloak(token)
+    return verify_hs256(token)
+
 
 def fastapi_dependency(required_roles: set[str] | None = None):
     """FastAPI dependency enforcing SPEC 1.3 auth.
@@ -97,7 +166,7 @@ def fastapi_dependency(required_roles: set[str] | None = None):
         claims: Claims | None = None
         if authorization and authorization.startswith("Bearer "):
             try:
-                claims = verify_hs256(authorization[len("Bearer "):])
+                claims = _verify_bearer(authorization[len("Bearer "):])
             except AuthError as exc:
                 raise HTTPException(401, f"invalid bearer token: {exc}") from exc
         elif os.environ.get("AUTH_MODE", "dev") == "dev" and x_dev_role in DEV_ROLES:

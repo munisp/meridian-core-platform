@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from meridian_events.auth import Claims, fastapi_dependency
-from meridian_events.store import JsonStore
+from meridian_events.store import open_store
 
 SERVICE = "settlement"
 VERSION = "0.1.0"
@@ -23,7 +23,7 @@ app = FastAPI(title="Meridian settlement", version=VERSION)
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-_store = JsonStore(DATA_DIR)
+_store = open_store(DATA_DIR)
 
 
 class ReconRecord(BaseModel):

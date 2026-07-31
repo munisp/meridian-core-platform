@@ -261,12 +261,27 @@ func (r *InprocRunner) WorkflowNames() []string {
 	return out
 }
 
-// NewRunnerFromEnv returns the in-process runner. When TEMPORAL_URL is set
-// a deployment links the real Temporal worker behind the same interface;
-// the inproc runner remains the zero-dependency dev default.
+// NewRunnerFromEnv returns the runner per HARDENING H1: TEMPORAL_URL set ->
+// real Temporal worker (profile=prod); otherwise the in-process dev runner.
+// Startup never fails because Temporal is unreachable — it falls back to
+// the inproc runner with a dev-profile log line.
 func NewRunnerFromEnv() Runner {
 	if url := os.Getenv("TEMPORAL_URL"); url != "" {
-		log.Printf("sdkx: TEMPORAL_URL=%s set — using inproc runner; link the Temporal worker build for live server execution", url)
+		ns := os.Getenv("TEMPORAL_NAMESPACE")
+		tq := os.Getenv("TEMPORAL_TASK_QUEUE")
+		tr, err := NewTemporalRunner(url, ns, tq)
+		if err != nil {
+			log.Printf("profile=dev component=temporal worker init failed (%v); inproc fallback", err)
+			return NewInprocRunner()
+		}
+		if err := tr.Start(); err != nil {
+			log.Printf("profile=dev component=temporal worker start failed (%v); inproc fallback", err)
+			tr.Stop()
+			return NewInprocRunner()
+		}
+		log.Printf("profile=prod component=temporal url=%s namespace=%q task_queue=%q", url, ns, tq)
+		return tr
 	}
+	log.Printf("profile=dev component=temporal inproc")
 	return NewInprocRunner()
 }

@@ -53,7 +53,7 @@ var lawfulBases = map[string]bool{
 }
 
 type server struct {
-	st *store.Store
+	st store.DocStore
 }
 
 func hashConsent(c Consent) string {
@@ -80,7 +80,7 @@ func (s *server) issueReceipt(c Consent, action, actor string) Receipt {
 
 func main() {
 	dir := httpx.Env("DATA_DIR", "./data")
-	st, err := store.Open(dir)
+	st, err := store.OpenFromEnv(dir)
 	if err != nil {
 		log.Fatal(err)
 	}

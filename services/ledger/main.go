@@ -34,7 +34,8 @@ type snapshot struct {
 }
 
 type server struct {
-	client *tb.DevClient
+	client tb.LedgerClient
+	dev    *tb.DevClient // non-nil only in dev profile (snapshots/hooks)
 	out    outbox.Store
 	dir    string
 }
@@ -44,18 +45,38 @@ func main() {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	client := tb.NewDevClient()
-	srv := &server{client: client, dir: dir}
-
-	// durable snapshot restore
-	if b, err := os.ReadFile(filepath.Join(dir, "ledger.snapshot.json")); err == nil {
-		var snap snapshot
-		if json.Unmarshal(b, &snap) == nil {
-			client.Restore(snap.Accounts, snap.Transfers, snap.Serials)
-			log.Printf("restored %d accounts, %d transfers", len(snap.Accounts), len(snap.Transfers))
+	// HARDENING H1: TIGERBEETLE_ADDRESSES set -> real cluster (profile=prod);
+	// otherwise the durable in-mem DevClient (profile=dev).
+	var client tb.LedgerClient
+	var dev *tb.DevClient
+	if os.Getenv("TIGERBEETLE_ADDRESSES") != "" {
+		if rc, err := tb.NewRealClientFromEnv(); err != nil {
+			log.Printf("profile=dev component=ledger tigerbeetle connect failed (%v); dev fallback", err)
+			dev = tb.NewDevClient()
+			client = dev
+		} else {
+			log.Printf("profile=prod component=ledger tigerbeetle addresses=%s", os.Getenv("TIGERBEETLE_ADDRESSES"))
+			client = rc
+			defer rc.Close()
 		}
+	} else {
+		log.Printf("profile=dev component=ledger in-mem")
+		dev = tb.NewDevClient()
+		client = dev
 	}
-	client.SetHooks(srv.persist, srv.emitTransferEvent)
+	srv := &server{client: client, dev: dev, dir: dir}
+
+	if dev != nil {
+		// durable snapshot restore
+		if b, err := os.ReadFile(filepath.Join(dir, "ledger.snapshot.json")); err == nil {
+			var snap snapshot
+			if json.Unmarshal(b, &snap) == nil {
+				dev.Restore(snap.Accounts, snap.Transfers, snap.Serials)
+				log.Printf("restored %d accounts, %d transfers", len(snap.Accounts), len(snap.Transfers))
+			}
+		}
+		dev.SetHooks(srv.persist, srv.emitTransferEvent)
+	}
 
 	// outbox + relay
 	ob, err := outbox.NewFileStore(filepath.Join(dir, "outbox"))
@@ -89,7 +110,10 @@ func main() {
 }
 
 func (s *server) persist() {
-	accts, trs, sers := s.client.Snapshot()
+	if s.dev == nil {
+		return // prod: TigerBeetle cluster is the system of record
+	}
+	accts, trs, sers := s.dev.Snapshot()
 	b, err := json.Marshal(snapshot{Accounts: accts, Transfers: trs, Serials: sers})
 	if err != nil {
 		log.Printf("snapshot marshal: %v", err)
@@ -148,7 +172,11 @@ func (s *server) createAccounts(w http.ResponseWriter, r *http.Request) {
 	} else {
 		serial := req.Serial
 		if serial == 0 {
-			serial = s.client.NextSerial(req.Namespace)
+			if s.dev != nil {
+				serial = s.dev.NextSerial(req.Namespace)
+			} else {
+				serial = tb.RandomSerial()
+			}
 		}
 		id = tb.MakeID(req.Namespace, serial)
 	}
@@ -277,7 +305,16 @@ func (s *server) createTransfer(w http.ResponseWriter, r *http.Request) {
 		httpx.Internal(w, "%v", err)
 		return
 	}
+	s.emitProd(res, t)
 	writeTransferResult(w, t.ID, res)
+}
+
+// emitProd emits the outbox transfer event in prod profile (in dev the
+// DevClient onChange/onEvent hooks do it).
+func (s *server) emitProd(res tb.Result, t tb.Transfer) {
+	if s.dev == nil && res.Code == tb.OK {
+		s.emitTransferEvent(t)
+	}
 }
 
 func (s *server) createPending(w http.ResponseWriter, r *http.Request) {
@@ -299,6 +336,7 @@ func (s *server) createPending(w http.ResponseWriter, r *http.Request) {
 		httpx.Internal(w, "%v", err)
 		return
 	}
+	s.emitProd(res, t)
 	writeTransferResult(w, t.ID, res)
 }
 

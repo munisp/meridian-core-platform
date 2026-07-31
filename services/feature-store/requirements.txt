@@ -1,0 +1,10 @@
+# meridian  runtime deps (dev profile runs stdlib+fastapi only)
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+httpx>=0.27
+pytest>=8.0
+# HARDENING H1 prod profile:
+PyJWT[crypto]>=2.8   # AUTH_MODE=keycloak (RS256/JWKS)
+psycopg[binary]>=3.1 # DATABASE_URL Postgres
+duckdb>=0.10 ; python_version >= "3.11"

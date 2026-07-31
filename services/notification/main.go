@@ -88,7 +88,7 @@ func (l *LogSimulator) Send(m Message) SendResult {
 }
 
 type server struct {
-	st        *store.Store
+	st        store.DocStore
 	providers []Provider
 }
 
@@ -105,7 +105,7 @@ func (s *server) providerFor(channel string) Provider {
 
 func main() {
 	dir := httpx.Env("DATA_DIR", "./data")
-	st, err := store.Open(dir)
+	st, err := store.OpenFromEnv(dir)
 	if err != nil {
 		log.Fatal(err)
 	}

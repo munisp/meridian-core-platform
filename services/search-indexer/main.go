@@ -8,12 +8,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	opensearch "github.com/opensearch-project/opensearch-go/v2"
+	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/bus"
@@ -29,21 +33,44 @@ const (
 )
 
 type server struct {
-	ix         *index.Index
-	opensearch string
-	hc         *http.Client
+	ix *index.Index
+	os *opensearch.Client // nil in dev profile
+}
+
+// osIndexFor maps a topic family to the OpenSearch index name
+// (HARDENING H3: nrs-{family}-v1).
+func osIndexFor(topic string) string {
+	family := "events"
+	parts := strings.Split(topic, ".")
+	if len(parts) >= 2 && parts[1] != "" {
+		family = parts[1]
+	}
+	return "nrs-" + family + "-v1"
 }
 
 func main() {
 	dir := httpx.Env("DATA_DIR", "./data")
-	st, err := store.Open(dir)
+	st, err := store.OpenFromEnv(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &server{
-		ix:         index.New(st),
-		opensearch: strings.TrimRight(os.Getenv("OPENSEARCH_URL"), "/"),
-		hc:         &http.Client{Timeout: 5 * time.Second},
+	s := &server{ix: index.New(st)}
+	// HARDENING H1: OPENSEARCH_URL set -> real bulk client (profile=prod).
+	if url := strings.TrimRight(os.Getenv("OPENSEARCH_URL"), "/"); url != "" {
+		cfg := opensearch.Config{
+			Addresses: []string{url},
+			Username:  os.Getenv("OPENSEARCH_USERNAME"),
+			Password:  os.Getenv("OPENSEARCH_PASSWORD"),
+		}
+		osc, err := opensearch.NewClient(cfg)
+		if err != nil {
+			log.Printf("profile=dev component=search-indexer opensearch client init failed (%v); local index only", err)
+		} else {
+			s.os = osc
+			log.Printf("profile=prod component=search-indexer opensearch=%s", url)
+		}
+	} else {
+		log.Printf("profile=dev component=search-indexer local json index")
 	}
 
 	// bus subscription (inproc: same-process only; kafka: real)
@@ -74,53 +101,46 @@ func main() {
 	mux.HandleFunc("GET /v1/search", s.search)
 	mux.HandleFunc("GET /v1/stats", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]any{
-			"docs": s.ix.Count(), "opensearch": s.opensearch != "",
+			"docs": s.ix.Count(), "opensearch": s.os != nil,
 		})
 	})
 
 	addr := ":" + httpx.Port("8008")
-	log.Printf("%s %s (opensearch=%q watch=%q)", service, version, s.opensearch, os.Getenv("OUTBOX_WATCH_DIR"))
+	log.Printf("%s %s (opensearch=%v watch=%q)", service, version, s.os != nil, os.Getenv("OUTBOX_WATCH_DIR"))
 	log.Fatal(httpx.ListenAndServe(addr, auth.Middleware(mux)))
 }
 
 func (s *server) ingest(topic string, env envelope.Envelope) {
 	d := s.ix.IndexEnvelope(topic, env)
-	if s.opensearch != "" {
+	if s.os != nil {
 		if err := s.bulkIndex(d); err != nil {
 			log.Printf("opensearch bulk: %v", err)
 		}
 	}
 }
 
-// bulkIndex indexes one doc to OpenSearch via the real bulk API.
+// bulkIndex indexes one doc to OpenSearch via the real bulk API
+// (opensearch-go v2), index nrs-{family}-v1.
 func (s *server) bulkIndex(d index.Doc) error {
-	meta, _ := json.Marshal(map[string]any{"index": map[string]any{"_index": "nrs-events", "_id": d.ID}})
+	meta, _ := json.Marshal(map[string]any{"index": map[string]any{"_index": osIndexFor(d.Topic), "_id": d.ID}})
 	var src map[string]any
 	if err := json.Unmarshal(d.Raw, &src); err != nil {
 		return err
 	}
 	src["topic"] = d.Topic
 	srcBody, _ := json.Marshal(src)
-	body := append(append(meta, '\n'), append(srcBody, '\n')...)
-	req, err := http.NewRequest(http.MethodPost, s.opensearch+"/_bulk", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-ndjson")
-	resp, err := s.hc.Do(req)
+	body := bytes.NewReader(append(append(meta, '\n'), append(srcBody, '\n')...))
+	req := opensearchapi.BulkRequest{Body: body}
+	resp, err := req.Do(context.Background(), s.os)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return &osError{status: resp.StatusCode}
+	if resp.IsError() {
+		return fmt.Errorf("opensearch bulk status %s", resp.Status())
 	}
 	return nil
 }
-
-type osError struct{ status int }
-
-func (e *osError) Error() string { return "opensearch bulk status " + http.StatusText(e.status) }
 
 // watchOutboxDirs polls */outbox.jsonl under dir and indexes new records.
 func (s *server) watchOutboxDirs(root string) {
