@@ -1,0 +1,148 @@
+# values-prod.yaml — national-scale production profile (SPEC B).
+# Targets: 50k TPS peak ingest, 2M concurrent USSD sessions, p99 API < 800ms.
+# HPA: cpu 65% + http_requests_per_second 700/pod (+ kafka_consumer_lag 5000 for consumers).
+# Scale-down: 15-min stabilization, max 2 pods/min (tax-season safe). PDB minAvailable=2.
+# preStop sleep 15s + terminationGracePeriodSeconds 45 for in-flight requests.
+environment: prod
+
+global:
+  imagePullPolicy: IfNotPresent
+
+# Defaults applied to every stateless service unless overridden below.
+defaults:
+  replicaCount: 4
+  resources:
+    requests: {cpu: "1", memory: 1Gi}
+    limits: {cpu: "2", memory: 2Gi}
+  terminationGracePeriodSeconds: 45
+  preStopSleepSeconds: 15
+  autoscaling:
+    enabled: true
+    minReplicas: 4
+    maxReplicas: 80
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target: {type: Utilization, averageUtilization: 65}
+      - type: Pods
+        pods:
+          metric: {name: http_requests_per_second}
+          target: {type: AverageValue, averageValue: "700"}
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 30
+        policies:
+          - {type: Percent, value: 100, periodSeconds: 30}
+      scaleDown:
+        stabilizationWindowSeconds: 900
+        policies:
+          - {type: Pods, value: 2, periodSeconds: 60}
+  pdb:
+    enabled: true
+    minAvailable: 2
+  keda:
+    enabled: true
+
+# kafkaLagConsumers: services that consume Kafka — they get the additional
+# kafka_consumer_lag external HPA metric (AverageValue 5000) and KEDA lag scalers.
+services:
+  filing-api:
+    autoscaling: {minReplicas: 6, maxReplicas: 80}
+  payments-api:
+    autoscaling: {minReplicas: 6, maxReplicas: 80}
+  admin-api:
+    autoscaling: {minReplicas: 2, maxReplicas: 20}
+    pdb: {enabled: true, minAvailable: 1}
+  audit-evidence:
+    kafkaConsumer: true
+    consumerGroup: audit-evidence
+    consumerTopic: audit.events.v1
+    autoscaling: {minReplicas: 4, maxReplicas: 40}
+  consent:
+    autoscaling: {minReplicas: 4, maxReplicas: 40}
+  edge-policy:
+    autoscaling: {minReplicas: 4, maxReplicas: 40}
+  feature-store:
+    autoscaling: {minReplicas: 4, maxReplicas: 40}
+  geo:
+    # geo-rs: embedded SQLite/parquet, read-heavy, tiny dataset (SPEC B section 3).
+    resources:
+      requests: {cpu: "500m", memory: 512Mi}
+      limits: {cpu: "1", memory: 1Gi}
+    autoscaling: {minReplicas: 4, maxReplicas: 30}
+  ledger:
+    autoscaling: {minReplicas: 6, maxReplicas: 60}
+  notification:
+    kafkaConsumer: true
+    consumerGroup: notification
+    consumerTopic: notifications.out.v1
+    autoscaling: {minReplicas: 4, maxReplicas: 40}
+  reg-watch:
+    kafkaConsumer: true
+    consumerGroup: reg-watch
+    consumerTopic: tax.filings.v1
+    autoscaling: {minReplicas: 2, maxReplicas: 20}
+  rp-registry:
+    autoscaling: {minReplicas: 4, maxReplicas: 30}
+  rules-engine:
+    autoscaling: {minReplicas: 4, maxReplicas: 60}
+  search-indexer:
+    kafkaConsumer: true
+    consumerGroup: search-indexer
+    consumerTopic: audit.events.v1
+    autoscaling: {minReplicas: 4, maxReplicas: 40}
+  settlement:
+    kafkaConsumer: true
+    consumerGroup: settlement
+    consumerTopic: payments.events.v1
+    autoscaling: {minReplicas: 4, maxReplicas: 40}
+  tin-graph:
+    autoscaling: {minReplicas: 4, maxReplicas: 40}
+  kyc-worker:
+    # ML serving (SPEC B section 5): KEDA on queue depth, 2->20 pods,
+    # CPU 4/pod, mem 8Gi, one model set per pod.
+    replicaCount: 2
+    resources:
+      requests: {cpu: "4", memory: 8Gi}
+      limits: {cpu: "4", memory: 8Gi}
+    autoscaling:
+      enabled: false   # scaled by KEDA queue-depth ScaledObject, not HPA
+    keda:
+      minReplicas: 2
+      maxReplicas: 20
+
+# KEDA ScaledObjects (SPEC B sections 2 & 5).
+keda:
+  # Cron pre-scale: 06:00 WAT (Africa/Lagos) during filing windows — pre-warm
+  # filing-api and payments-api before the morning rush.
+  cronPreScale:
+    enabled: true
+    timezone: Africa/Lagos
+    schedule: "0 6 * * *"
+    desiredReplicas: 24
+    startOnly: true   # scale floor only; HPA still owns runtime scaling
+    targets:
+      - filing-api
+      - payments-api
+      - rules-engine
+  # Consumer lag scalers: one per kafkaConsumer service above.
+  lag:
+    threshold: "5000"
+    maxLagAlert: 50000   # SPEC B: max lag alert 50k
+    brokers: redpanda.kafka.svc.cluster.local:9092
+  # ML serving scalers (SPEC B section 5): Temporal task-queue backlog /
+  # Redis list length for kyc workers; ollama fixed at 3 replicas.
+  ml:
+    kycWorker:
+      scaler: redis
+      listName: kyc:queue:tasks
+      listLength: "25"
+      address: redis-master.data.svc.cluster.local:6379
+      minReplicas: 2
+      maxReplicas: 20
+    ollama:
+      replicaCount: 3
+      env:
+        OLLAMA_NUM_PARALLEL: "4"
+        OLLAMA_KEEP_ALIVE: 10m
