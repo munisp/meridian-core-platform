@@ -1,0 +1,88 @@
+# KEDA ScaledObjects (SPEC B sections 2 & 5):
+#  1. cron pre-scale 06:00 Africa/Lagos (WAT) during filing windows.
+#  2. kafka consumer lag scalers for consumer services.
+#  3. ML serving queue-depth scalers (kyc-worker; ollama is a fixed 3-replica deployment).
+{{- $k := .Values.keda }}
+{{- if and $k $k.cronPreScale.enabled }}
+{{- range $k.cronPreScale.targets }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ . }}-prescale
+  labels:
+    app.kubernetes.io/name: {{ . }}
+    app.kubernetes.io/part-of: meridian-core
+spec:
+  scaleTargetRef:
+    name: {{ . }}
+  minReplicaCount: {{ index $.Values.services . "autoscaling" "minReplicas" | default 4 }}
+  maxReplicaCount: {{ index $.Values.services . "autoscaling" "maxReplicas" | default 80 }}
+  triggers:
+    - type: cron
+      metadata:
+        timezone: {{ $k.cronPreScale.timezone }}
+        start: {{ $k.cronPreScale.schedule | quote }}
+        end: "30 8 * * *"
+        desiredReplicas: {{ $k.cronPreScale.desiredReplicas | quote }}
+{{- end }}
+{{- end }}
+{{- range $name, $svc := .Values.services }}
+{{- if $svc.kafkaConsumer }}
+{{- $cfg := include "meridian.serviceConfig" (dict "root" $ "svc" $svc) | fromYaml }}
+{{- if $cfg.keda.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $name }}-lag
+  labels:
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/part-of: meridian-core
+spec:
+  scaleTargetRef:
+    name: {{ $name }}
+  minReplicaCount: {{ $cfg.autoscaling.minReplicas }}
+  maxReplicaCount: {{ $cfg.autoscaling.maxReplicas }}
+  pollingInterval: 15
+  cooldownPeriod: 300
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ $.Values.keda.lag.brokers }}
+        consumerGroup: {{ $svc.consumerGroup | default $name }}
+        topic: {{ $svc.consumerTopic | default "tax.filings.v1" }}
+        lagThreshold: {{ $.Values.keda.lag.threshold | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+# ML serving (SPEC B section 5): kyc workers 2->20 pods on queue depth.
+{{- if $k.ml }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kyc-worker-queue
+  labels:
+    app.kubernetes.io/name: kyc-worker
+    app.kubernetes.io/part-of: meridian-core
+spec:
+  scaleTargetRef:
+    name: kyc-worker
+  minReplicaCount: {{ $k.ml.kycWorker.minReplicas }}
+  maxReplicaCount: {{ $k.ml.kycWorker.maxReplicas }}
+  pollingInterval: 10
+  cooldownPeriod: 300
+  triggers:
+    - type: redis
+      metadata:
+        address: {{ $k.ml.kycWorker.address }}
+        listName: {{ $k.ml.kycWorker.listName }}
+        listLength: {{ $k.ml.kycWorker.listLength | quote }}
+    - type: cron
+      metadata:
+        timezone: Africa/Lagos
+        start: "0 6 * * *"
+        end: "30 20 * * *"
+        desiredReplicas: "6"
+{{- end }}
