@@ -1,0 +1,96 @@
+# APISIX route plugin configs — load shedding + rate limiting (SPEC B section 4).
+# Applied by edge-policy via the Admin API on route-table change (see
+# infra/apisix/config.yaml — routes are distributed by edge-policy svc).
+# Rate-limit counters live in APISIX, NOT Redis Lua (SPEC B section 3).
+
+# Baseline plugin set applied to every public route.
+default_route_plugins:
+  limit-req:
+    rate: 20
+    burst: 40
+    key: remote_addr
+    rejected_code: 429
+  api-breaker:
+    break_response_code: 503
+    unhealthy:
+      http_statuses: [500]
+      failures: 3
+    healthy:
+      successes: 2
+      timeout: 30
+  prometheus: {}
+  proxy-rewrite:
+    headers:
+      X-Load-Class: standard
+
+# Route-specific overrides.
+routes:
+  # Filing endpoints: 20 r/s per TIN (SPEC B section 3).
+  - name: filings-post
+    uri: /v1/filings*
+    methods: [POST]
+    plugins:
+      limit-req:
+        rate: 20
+        burst: 40
+        key: http_x_tin   # per-TIN key; edge-policy injects X-TIN from JWT claim
+        rejected_code: 429
+      api-breaker:
+        break_response_code: 503
+        unhealthy: {http_statuses: [500], failures: 3}
+        healthy: {successes: 2, timeout: 30}
+      proxy-rewrite:
+        headers: {X-Load-Class: critical}   # never shed below hard cap
+  - name: payments-post
+    uri: /v1/payments*
+    methods: [POST]
+    plugins:
+      limit-req:
+        rate: 20
+        burst: 40
+        key: http_x_tin
+        rejected_code: 429
+      api-breaker:
+        break_response_code: 503
+        unhealthy: {http_statuses: [500], failures: 3}
+        healthy: {successes: 2, timeout: 30}
+      proxy-rewrite:
+        headers: {X-Load-Class: critical}
+  # OTP: limit-count 100/day (SPEC B section 3).
+  - name: otp-request
+    uri: /v1/auth/otp*
+    methods: [POST]
+    plugins:
+      limit-count:
+        count: 100
+        time_window: 86400
+        key: http_x_tin
+        rejected_code: 429
+      limit-req:
+        rate: 2
+        burst: 4
+        key: remote_addr
+        rejected_code: 429
+  # Shed-first classes (SPEC B section 4): batch/export, then autocomplete.
+  - name: batch-export
+    uri: /v1/exports*
+    methods: [POST, GET]
+    plugins:
+      limit-req:
+        rate: 5
+        burst: 5
+        key: http_x_tin
+        rejected_code: 429
+      proxy-rewrite:
+        headers: {X-Load-Class: sheddable-batch}
+  - name: search-autocomplete
+    uri: /v1/search/autocomplete*
+    methods: [GET]
+    plugins:
+      limit-req:
+        rate: 50
+        burst: 50
+        key: remote_addr
+        rejected_code: 429
+      proxy-rewrite:
+        headers: {X-Load-Class: sheddable-search}
