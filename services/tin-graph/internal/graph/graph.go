@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"sort"
@@ -38,10 +39,15 @@ type Entity struct {
 	CreatedAt  string            `json:"created_at"`
 }
 
-// TINHMACKey from env (SPEC 1.3).
+// TINHMACKey from env (SPEC 1.3). A5 hardening: PROFILE=prod REQUIRES a
+// dedicated TIN_HMAC_KEY — the dev default is never used in prod (the
+// tin_hash pseudonymisation is only as strong as this key).
 func TINHMACKey() []byte {
 	k := os.Getenv("TIN_HMAC_KEY")
 	if k == "" {
+		if os.Getenv("PROFILE") == "prod" {
+			log.Fatal("profile=prod FATAL: TIN_HMAC_KEY is required (no dev-secret default)")
+		}
 		k = "meridian-dev-tin-hmac-key"
 	}
 	return []byte(k)

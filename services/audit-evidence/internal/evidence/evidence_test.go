@@ -9,10 +9,12 @@ import (
 	"github.com/munisp/meridian-core-platform/packages/events/store"
 )
 
+var testChainKey = []byte("test-chain-hmac-key")
+
 func openTest(t *testing.T) (*AuditLog, *WormStore, string) {
 	t.Helper()
 	dir := t.TempDir()
-	al, err := OpenAuditLog(dir)
+	al, err := OpenAuditLog(dir, testChainKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +40,7 @@ func TestHashChain(t *testing.T) {
 		t.Fatalf("chain invalid at seq %d", broken)
 	}
 	// reload: tail recovered, chain still valid
-	al2, err := OpenAuditLog(dir)
+	al2, err := OpenAuditLog(dir, testChainKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,10 +78,32 @@ func TestChainDetectsTampering(t *testing.T) {
 		out = append(out, '\n')
 	}
 	os.WriteFile(path, out, 0o644)
-	al2, _ := OpenAuditLog(dir)
+	al2, _ := OpenAuditLog(dir, testChainKey)
 	broken, _ := al2.VerifyChain()
 	if broken == 0 {
 		t.Fatal("tampering not detected")
+	}
+}
+
+func TestChainKeyedAndSeqCovered(t *testing.T) {
+	al, _, _ := openTest(t)
+	e1, _ := al.Append(AuditEvent{Actor: "u1", Subject: "s1", Action: "view", Type: "t"})
+	e2, _ := al.Append(AuditEvent{Actor: "u1", Subject: "s1", Action: "view", Type: "t"})
+	if e1.Seq != 1 || e2.Seq != 2 {
+		t.Fatalf("seq not assigned before hashing: %d %d", e1.Seq, e2.Seq)
+	}
+	// keyed: recomputing with the WRONG key must not reproduce the hash
+	if computeHash(e1, []byte("wrong-key")) == e1.Hash {
+		t.Fatal("unkeyed/wrong-key hash matches keyed chain hash")
+	}
+	if computeHash(e1, testChainKey) != e1.Hash {
+		t.Fatal("keyed recompute mismatch")
+	}
+	// seq coverage: same event at a different seq hashes differently
+	e3 := e1
+	e3.Seq = 99
+	if computeHash(e3, testChainKey) == e1.Hash {
+		t.Fatal("seq not covered by chain hash")
 	}
 }
 
