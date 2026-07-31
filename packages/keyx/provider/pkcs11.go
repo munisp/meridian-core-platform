@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -235,7 +234,12 @@ func (t *SoftToken) PublicKey(_ context.Context, keyID string) ([]byte, error) {
 	defer t.mu.Unlock()
 	priv, ok := t.keys[keyID]
 	if !ok {
-		return nil, errors.New("soft-token: unknown key (sign first to generate)")
+		var err error
+		_, priv, err = ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+		t.keys[keyID] = priv
 	}
 	pub := priv.Public().(ed25519.PublicKey)
 	out := make([]byte, len(pub))
