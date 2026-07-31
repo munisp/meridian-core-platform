@@ -125,6 +125,7 @@ func main() {
 	mux.HandleFunc("POST /v1/verify/cac", s.verifyCAC)
 	mux.HandleFunc("POST /v1/entities/resolve", s.resolve)
 	mux.HandleFunc("GET /v1/entities/{id}/graph", s.entityGraph)
+	mux.HandleFunc("GET /v1/taxpayer360/{tin_hash}", s.taxpayer360Handler) // I1
 	mux.HandleFunc("GET /v1/config/match-thresholds", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, s.cfg)
 	})
