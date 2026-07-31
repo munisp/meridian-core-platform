@@ -252,8 +252,12 @@ def train_fusion(df, mlp, ae, gnn, mlp_pack, ae_pack, graph, epochs: int = 200):
     metrics = {"auc": fa, "pr_auc": pr_auc(fused, yte), "recall_at_5pct": recall_at_k(fused, yte),
                "weights": {n: float(w) for n, w in zip(FraudFusion.STREAMS, weights)},
                "single_stream_aucs": singles, "uplift_vs_best_single": float(fa - best_single)}
-    registry.register("fraudfusion", {"state_dict": fusion.state_dict(), "weights": metrics["weights"]},
-                      metrics, _window(df))
+    pack = {"fusion_logits": fusion.logits.detach().clone(),
+            "ae_lo": fusion.ae_lo.clone(), "ae_hi": fusion.ae_hi.clone(),
+            "weights": metrics["weights"],
+            "components": {"mlp": "fraud_mlp", "ae": "fraud_autoencoder", "gnn": "gnn_gcn"},
+            "note": "sub-model weights are registered separately; this pack holds only fusion params"}
+    registry.register("fraudfusion", pack, metrics, _window(df))
     return fusion, metrics, {}
 
 
