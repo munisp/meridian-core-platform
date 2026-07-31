@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
+	"github.com/munisp/meridian-core-platform/packages/events/bus"
 	"github.com/munisp/meridian-core-platform/packages/events/envelope"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"github.com/munisp/meridian-core-platform/packages/events/store"
@@ -61,6 +62,7 @@ var lawfulBases = map[string]bool{
 type server struct {
 	st         store.DocStore
 	receiptKey []byte
+	eventBus   bus.Bus // C2 alert events; nil in tests
 }
 
 func hashConsent(c Consent) string {
@@ -128,10 +130,20 @@ func main() {
 	mux := http.NewServeMux()
 	httpx.RegisterStandard(mux, service, version, nil)
 	mux.HandleFunc("POST /v1/consents", s.create)
+	mux.HandleFunc("POST /v1/consents/check", s.check) // C1 fast path
 	mux.HandleFunc("GET /v1/consents/{subject}", s.listBySubject)
 	mux.HandleFunc("POST /v1/consents/{id}/revoke", s.revoke)
 	mux.HandleFunc("POST /v1/consents/{id}/renew", s.renew)
 	mux.HandleFunc("GET /v1/receipts/{id}", s.getReceipt)
+	// C2: NDPA s.40 breach registry — privacy:officer/admin only
+	mux.HandleFunc("POST /v1/privacy/breaches", requireAnyRole(s.breachCreate, "privacy:officer", "admin"))
+	mux.HandleFunc("GET /v1/privacy/breaches", requireAnyRole(s.breachList, "privacy:officer", "admin"))
+	mux.HandleFunc("GET /v1/privacy/breaches/{id}", requireAnyRole(s.breachGet, "privacy:officer", "admin"))
+	mux.HandleFunc("POST /v1/privacy/breaches/{id}/transition", requireAnyRole(s.breachTransition, "privacy:officer", "admin"))
+	// C3: data subject rights (export / erasure / access log)
+	mux.HandleFunc("GET /v1/dsr/{subject}/export", s.dsrExport)
+	mux.HandleFunc("POST /v1/dsr/{subject}/erasure", s.dsrErasure)
+	mux.HandleFunc("GET /v1/dsr/{subject}/access-log", s.dsrAccessLog)
 
 	addr := ":" + httpx.Port("8007")
 	log.Printf("%s %s", service, version)

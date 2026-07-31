@@ -26,10 +26,11 @@ const (
 var seedThresholdsPack []byte
 
 type server struct {
-	st  store.DocStore
-	cfg graph.MatchConfig
-	nin graph.NINAdapter
-	cac graph.CACAdapter
+	st      store.DocStore
+	cfg     graph.MatchConfig
+	nin     graph.NINAdapter
+	cac     graph.CACAdapter
+	consent consentChecker // C1 consent gate (nil only before wiring)
 }
 
 func loadMatchConfig() graph.MatchConfig {
@@ -121,7 +122,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &server{st: st, cfg: loadMatchConfig(), nin: nin, cac: cac}
+	// C1: consent gate — fail-closed in prod (CONSENT_URL required).
+	gate, err := consentCheckerFromEnv(os.Getenv("PROFILE"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := &server{st: st, cfg: loadMatchConfig(), nin: nin, cac: cac, consent: gate}
 
 	mux := s.routes()
 	addr := ":" + httpx.Port("8003")
@@ -259,13 +265,18 @@ func (s *server) provision(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) verifyTIN(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		TIN string `json:"tin"`
+		TIN         string `json:"tin"`
+		LawfulBasis string `json:"lawful_basis"`
 	}
 	if err := httpx.Decode(r, &req); err != nil || req.TIN == "" {
 		httpx.BadRequest(w, "tin required")
 		return
 	}
 	hash := graph.HashTIN(req.TIN)
+	// C1: consent gate — verification requires lawful_basis + valid consent.
+	if !s.gateVerification(w, r, hash, "tin_verification", req.LawfulBasis) {
+		return
+	}
 	for _, e := range s.allEntities() {
 		if e.TINHash == hash {
 			httpx.JSON(w, http.StatusOK, map[string]any{
@@ -278,10 +289,15 @@ func (s *server) verifyTIN(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) verifyNIN(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		NIN string `json:"nin"`
+		NIN         string `json:"nin"`
+		LawfulBasis string `json:"lawful_basis"`
 	}
 	if err := httpx.Decode(r, &req); err != nil || req.NIN == "" {
 		httpx.BadRequest(w, "nin required")
+		return
+	}
+	// C1: consent gate — verification requires lawful_basis + valid consent.
+	if !s.gateVerification(w, r, graph.HashValue(req.NIN), "nin_verification", req.LawfulBasis) {
 		return
 	}
 	res, err := s.nin.Verify(req.NIN)

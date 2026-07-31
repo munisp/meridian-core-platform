@@ -98,7 +98,7 @@ func VerifyHS256(token string) (Claims, error) {
 	return c, nil
 }
 
-var devRoles = map[string]bool{"admin": true, "operator": true, "auditor": true, "board": true}
+var devRoles = map[string]bool{"admin": true, "operator": true, "auditor": true, "board": true, "privacy:officer": true}
 
 // Middleware enforces SPEC 1.3 auth. In AUTH_MODE=dev (default) the
 // X-Dev-Role header is accepted as a principal; Bearer JWT always works.
