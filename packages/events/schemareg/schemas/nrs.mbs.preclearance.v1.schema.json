@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridian.nrs/schemas/nrs.mbs.preclearance.v1.schema.json",
+  "title": "MBS e-invoice preclearance payload (data of nrs.mbs.preclearance.v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "invoice_id": {"type": "string"},
+    "irn": {"type": "string"},
+    "amount_kobo": {"type": "integer", "minimum": 0},
+    "vat_kobo": {"type": "integer", "minimum": 0},
+    "tin_hash": {"type": "string"}
+  }
+}

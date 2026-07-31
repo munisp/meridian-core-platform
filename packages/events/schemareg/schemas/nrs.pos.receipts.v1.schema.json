@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridian.nrs/schemas/nrs.pos.receipts.v1.schema.json",
+  "title": "POS receipt payload (data of nrs.pos.receipts.v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "receipt_id": {"type": "string"},
+    "amount_kobo": {"type": "integer", "minimum": 0},
+    "vat_kobo": {"type": "integer", "minimum": 0},
+    "tin_hash": {"type": "string"},
+    "device_id": {"type": "string"}
+  }
+}

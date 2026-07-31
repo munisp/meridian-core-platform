@@ -124,3 +124,48 @@ class OutboxRelay:
         if self._thread:
             self._thread.join(timeout=5)
         self.flush_once()
+
+
+class DuckDBOutbox:
+    """Same-transaction outbox on a DuckDB connection (audit I2 reference
+    pattern for Python services whose domain state already lives in DuckDB,
+    e.g. feature-store). Call ``append`` inside the same transaction /
+    critical section as the domain writes; an ``OutboxRelay`` drains rows
+    onto the bus with a seq checkpoint. Postgres services should use the
+    meridian_outbox table (packages/events/store/pgoutbox.go) instead.
+    """
+
+    def __init__(self, db, lock: threading.RLock | None = None,
+                 table: str = "meridian_outbox") -> None:
+        self.db = db
+        self.lock = lock or threading.RLock()
+        self.table = table
+        with self.lock:
+            self.db.execute(f"CREATE SEQUENCE IF NOT EXISTS {table}_seq START 1")
+            self.db.execute(
+                f"""CREATE TABLE IF NOT EXISTS {table} (
+                        seq BIGINT PRIMARY KEY,
+                        topic TEXT NOT NULL,
+                        envelope JSON NOT NULL,
+                        created_at TIMESTAMP DEFAULT current_timestamp)""")
+
+    def append(self, topic: str, env: Envelope) -> None:
+        """Insert one outbox row. MUST be called within the caller's
+        transaction/critical section covering the domain state change."""
+        with self.lock:
+            seq = self.db.execute(
+                f"SELECT nextval('{self.table}_seq')").fetchone()[0]
+            self.db.execute(
+                f"INSERT INTO {self.table} (seq, topic, envelope) VALUES (?, ?, ?)",
+                [seq, topic, json.dumps(env.to_dict())])
+
+    def pending(self, after_seq: int, limit: int = 200) -> list[dict]:
+        with self.lock:
+            rows = self.db.execute(
+                f"SELECT seq, topic, envelope FROM {self.table} "
+                "WHERE seq > ? ORDER BY seq LIMIT ?", [after_seq, limit]).fetchall()
+        out = []
+        for seq, topic, raw in rows:
+            env = raw if isinstance(raw, dict) else json.loads(raw)
+            out.append({"seq": seq, "topic": topic, "envelope": env})
+        return out

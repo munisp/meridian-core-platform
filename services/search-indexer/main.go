@@ -95,6 +95,15 @@ func main() {
 		go s.watchOutboxDirs(watch)
 	}
 
+	// Postgres transactional outbox (audit I2): when the service store is
+	// Postgres, index directly from producer outbox tables claimed with
+	// FOR UPDATE SKIP LOCKED (OUTBOX_PG_TABLES=svc:dburl pairs, or the
+	// service's own DATABASE_URL when OUTBOX_PG=1).
+	if pg, ok := st.(*store.PgStore); ok && os.Getenv("OUTBOX_PG") == "1" {
+		go s.pollPgOutbox(pg)
+		log.Printf("profile=prod component=search-indexer pg-outbox poll (DATABASE_URL)")
+	}
+
 	mux := http.NewServeMux()
 	httpx.RegisterStandard(mux, service, version, nil)
 	mux.HandleFunc("POST /v1/index", s.indexDoc)
@@ -172,6 +181,25 @@ func (s *server) watchOutboxDirs(root string) {
 			return nil
 		})
 		time.Sleep(2 * time.Second)
+	}
+}
+
+// pollPgOutbox claims published-pending rows from the Postgres outbox table
+// (FOR UPDATE SKIP LOCKED via store.ClaimOutbox) and indexes them. This is
+// the consumer half of the transactional-outbox pattern (audit I2).
+func (s *server) pollPgOutbox(pg *store.PgStore) {
+	ctx := context.Background()
+	for {
+		claims, err := pg.ClaimOutbox(ctx, 200)
+		if err != nil {
+			log.Printf("pg outbox poll: %v", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		for _, c := range claims {
+			s.ingest(c.Topic, c.Envelope)
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridian.nrs/schemas/nrs.onb.ussd.v1.schema.json",
+  "title": "USSD onboarding action payload (data of nrs.onb.ussd.v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["action"],
+  "properties": {
+    "action": {"type": "string", "enum": ["onb.register", "onb.tin_status"]},
+    "session_id": {"type": "string"},
+    "msisdn_hash": {"type": "string"},
+    "operator_id": {"type": "string"},
+    "upgraded_legacy": {"type": "boolean"}
+  }
+}

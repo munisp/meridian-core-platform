@@ -1,9 +1,18 @@
 """Platform-event consumer -> online features -> score -> emit scored events.
 
-Consumes transaction/filing events (topics: txs.events, filings.events),
-builds a small online feature vector per event, calls the serving tier
-(HTTP, ML_SERVING_URL) for fraud/fusion scores, and emits scored events to
-`ml.scored.events`.
+Consumes the REAL published nrs.* payment/transaction topics (audit I6 —
+the previous defaults `txs.events,filings.events` are published by no
+service and would idle forever), unwraps the canonical envelope (legacy
+raw maps are upgraded via the consumer shim), builds a small online
+feature vector per event, calls the serving tier (HTTP, ML_SERVING_URL)
+for fraud/fusion scores, and emits scored events as canonical
+`nrs.ml.scored.v1` envelopes.
+
+Topic config:
+  ML_CONSUME_TOPICS  override list (default: the payment-ish nrs.* topics)
+  ML_LEGACY_TOPICS=1 additionally subscribe to the legacy aliases
+                     txs.events,filings.events (pre-audit names)
+  ML_SCORED_TOPIC    scored output topic (default nrs.ml.scored.v1)
 
 Dev fallback: when KAFKA_BROKERS is unset or kafka-python is unavailable the
 consumer runs in "embedded" mode reading newline-delimited JSON events from
@@ -24,14 +33,63 @@ import time
 import urllib.request
 from typing import Optional
 
+try:
+    from meridian_events.envelope import new_envelope
+    from meridian_events.shim import coerce_envelope, is_canonical_envelope
+except ImportError:  # pragma: no cover - package path not set
+    new_envelope = None
+    is_canonical_envelope = lambda m: False  # noqa: E731
+    coerce_envelope = None
+
 logger = logging.getLogger("ml.pipelines.consumer")
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 
 SERVING_URL = os.environ.get("ML_SERVING_URL", "http://localhost:8090")
-CONSUME_TOPICS = os.environ.get("ML_CONSUME_TOPICS", "txs.events,filings.events").split(",")
-SCORED_TOPIC = os.environ.get("ML_SCORED_TOPIC", "ml.scored.events")
+
+# Real published nrs.* topics carrying payment/transaction events.
+DEFAULT_TOPICS = [
+    "nrs.psm.payments.v1",
+    "nrs.psm.remittance.v1",
+    "nrs.pos.receipts.v1",
+    "nrs.pos.receipt.v1",
+    "nrs.mbs.preclearance.v1",
+    "nrs.onb.capture.ingested.v1",
+]
+LEGACY_ALIAS_TOPICS = ["txs.events", "filings.events"]  # pre-audit names (I6)
+
+
+def consume_topics() -> list[str]:
+    topics = [t.strip() for t in os.environ.get(
+        "ML_CONSUME_TOPICS", ",".join(DEFAULT_TOPICS)).split(",") if t.strip()]
+    if os.environ.get("ML_LEGACY_TOPICS") == "1":
+        topics += [t for t in LEGACY_ALIAS_TOPICS if t not in topics]
+    return topics
+
+
+CONSUME_TOPICS = consume_topics()
+SCORED_TOPIC = os.environ.get("ML_SCORED_TOPIC", "nrs.ml.scored.v1")
 SCORED_FILE = os.environ.get("ML_SCORED_FILE", "ml-scored-events.jsonl")
 SCORE_MODEL = os.environ.get("ML_SCORE_MODEL", "fraud")
+
+# topic family -> feature channel (matches build_features one-hot)
+_TOPIC_CHANNEL = {
+    "psm": "agent",
+    "pos": "pos",
+    "mbs": "einvoice",
+    "onb": "agent",
+    "onb.ussd": "ussd",
+    "pssp": "pssp",
+}
+
+
+def channel_for_topic(topic: Optional[str]) -> Optional[str]:
+    if not topic:
+        return None
+    fam = topic[4:] if topic.startswith("nrs.") else topic
+    for prefix, ch in sorted(_TOPIC_CHANNEL.items(), key=lambda kv: -len(kv[0])):
+        if fam.startswith(prefix):
+            return ch
+    return None
 
 _SENSITIVE_KEYS = ("nin", "tin", "msisdn", "phone", "account_number")
 
@@ -87,8 +145,29 @@ def score(features: list[float], entity_hash: str, amount_kobo: Optional[int],
         return None
 
 
-def process_event(event: dict) -> dict:
-    ev = pseudonymise(event)
+def unwrap_event(event: dict, topic: Optional[str] = None) -> dict:
+    """Accept a canonical envelope OR a legacy raw map; return the domain
+    payload with envelope context folded in (event id, channel default)."""
+    if is_canonical_envelope(event) or (
+            isinstance(event, dict) and "data" in event and "type" in event):
+        data = dict(event.get("data") or {})
+        data.setdefault("id", event.get("id"))
+        if "hour" not in data and event.get("time"):
+            try:
+                data["hour"] = int(str(event["time"])[11:13])
+            except (ValueError, IndexError):
+                pass
+        data.setdefault("channel", channel_for_topic(event.get("type") or topic))
+        return data
+    if isinstance(event, dict):
+        ev = dict(event)
+        ev.setdefault("channel", channel_for_topic(topic))
+        return ev
+    return {}
+
+
+def process_event(event: dict, topic: Optional[str] = None) -> dict:
+    ev = pseudonymise(unwrap_event(event, topic))
     entity_hash = ev.get("tin_hash") or ev.get("entity_id") or hashlib.sha256(
         json.dumps(ev, sort_keys=True, default=str).encode()).hexdigest()
     amount_kobo = ev.get("amount_kobo") or ev.get("amount")
@@ -106,6 +185,8 @@ def process_event(event: dict) -> dict:
     }
     logger.info("component=ml-consumer entity=%s score=%s ok=%s",
                 entity_hash[:16], scored["score"], scored["scoring_ok"])
+    if new_envelope is not None:
+        return new_envelope(SCORED_TOPIC, "ml-consumer", scored).to_dict()
     return scored
 
 
@@ -148,7 +229,7 @@ def run() -> None:  # pragma: no cover - long-running loop
             send = _kafka_sink()
             logger.info("profile=prod component=ml-consumer topics=%s", CONSUME_TOPICS)
             for msg in consumer:
-                send(process_event(msg.value))
+                send(process_event(msg.value, topic=msg.topic))
             return
         except ImportError:
             logger.warning("component=ml-consumer kafka-python missing; embedded mode")
@@ -162,7 +243,8 @@ def run() -> None:  # pragma: no cover - long-running loop
             if not line:
                 continue
             try:
-                sink.send(process_event(json.loads(line)))
+                rec = json.loads(line)
+                sink.send(process_event(rec, topic=rec.get("type") or rec.get("topic")))
             except json.JSONDecodeError:
                 logger.warning("component=ml-consumer skipping malformed event line")
 

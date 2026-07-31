@@ -18,11 +18,33 @@ from . import synthetic
 log = logging.getLogger("ml.pipeline")
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-EXTRACT_SQL = """
+# The extract reads the ingestion VIEW `ml_transactions_v`, not a physical
+# `transactions` table (audit I6: nothing ever wrote such a table). The view
+# is defined over the lakehouse bronze transactions table
+# (bronze_txs_local / the Iceberg table bronze.txs_events written by
+# ml/pipelines/lakehouse_sink.py). DDL — documented in docs/ingestion.md:
+#
+#   CREATE VIEW ml_transactions_v AS
+#   SELECT id                                   AS tx_id,
+#          data->>'tin_hash'                    AS entity_id,
+#          data->>'counterparty_hash'           AS counterparty_id,
+#          (data->>'occurred_at')::timestamptz  AS occurred_at,
+#          data->>'channel'                     AS channel,
+#          data->>'category'                    AS category,
+#          (data->>'amount_kobo')::bigint       AS amount_kobo,
+#          (data->>'vat_rate')::double          AS vat_rate,
+#          0                                     AS label,
+#          ''                                    AS fraud_type
+#   FROM bronze_txs;   -- outbox/bronze mirror of nrs.* payment topics
+#
+# Services (or the sink backfill) materialise `bronze_txs` from the bronze
+# zone; until then the view can be defined over the JSONL outbox import.
+EXTRACT_TABLE = os.environ.get("ML_EXTRACT_TABLE", "ml_transactions_v")
+EXTRACT_SQL = f"""
 SELECT tx_id, entity_id AS entity, counterparty_id AS counterparty,
        occurred_at::date AS date, EXTRACT(hour FROM occurred_at)::int AS hour,
        channel, category, amount_kobo, vat_rate, label, fraud_type
-FROM transactions
+FROM {EXTRACT_TABLE}
 WHERE occurred_at >= %(window_start)s AND occurred_at < %(window_end)s
 ORDER BY tx_id
 """
@@ -57,13 +79,18 @@ def feature_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
 
 def write_lakehouse(df: pd.DataFrame, base_dir: str | None = None) -> str:
-    """Iceberg-style partitioned parquet layout: <base>/transactions/date=YYYY-MM-DD/part.parquet.
+    """Write transaction frames to the unified lakehouse (audit I4).
 
-    Writes to MinIO (s3fs-compatible path) when MINIO_* set, else local dir.
-    Returns the base path used.
+    Layout converges on the shared zone/dataset/dt convention:
+    <base>/silver/transactions/dt=YYYY-MM-DD/part-*.parquet plus a
+    catalog.json manifest (tables, schema versions, snapshots) via
+    ml.data.lakehouse.ParquetLakehouse. When ICEBERG_REST_URI is set the
+    real Iceberg REST catalog on MinIO is used instead. Legacy MinIO
+    (MINIO_ENDPOINT, no ICEBERG_REST_URI) keeps the old s3 partitioned
+    write for compatibility.
     """
     endpoint = os.environ.get("MINIO_ENDPOINT", "").strip()
-    if endpoint and base_dir is None:
+    if endpoint and base_dir is None and not os.environ.get("ICEBERG_REST_URI"):
         bucket = os.environ.get("MINIO_BUCKET", "meridian-lakehouse")
         scheme = "https" if os.environ.get("MINIO_USE_SSL", "false").lower() == "true" else "http"
         base = f"s3://{bucket}/lakehouse"
@@ -72,16 +99,22 @@ def write_lakehouse(df: pd.DataFrame, base_dir: str | None = None) -> str:
             "secret": os.environ.get("MINIO_SECRET_KEY", ""),
             "client_kwargs": {"endpoint_url": f"{scheme}://{endpoint}"},
         }
-        log.info("profile=prod component=ml-lakehouse target=minio bucket=%s", bucket)
-    else:
-        base = base_dir or str(Path(__file__).resolve().parents[1] / "data" / "lakehouse")
-        storage_options = None
-        log.info("profile=dev component=ml-lakehouse target=local path=%s", base)
+        log.info("profile=prod component=ml-lakehouse target=minio bucket=%s (legacy layout)", bucket)
+        out = df.copy()
+        out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+        out.to_parquet(base, engine="pyarrow", partition_cols=["date"],
+                       index=False, storage_options=storage_options)
+        return base
 
+    from .lakehouse import get_lakehouse
+    base = base_dir or str(Path(__file__).resolve().parents[1] / "data" / "lakehouse")
+    lh = get_lakehouse(base)
+    log.info("component=ml-lakehouse impl=%s path=%s", type(lh).__name__, base)
     out = df.copy()
     out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
-    out.to_parquet(base, engine="pyarrow", partition_cols=["date"],
-                   index=False, storage_options=storage_options)
+    for day, grp in out.groupby("date"):
+        lh.write("silver", "transactions",
+                 grp.drop(columns=[]).to_dict("records"), partition=str(day))
     return base
 
 
@@ -89,4 +122,7 @@ def read_lakehouse(base_dir: str | None = None) -> pd.DataFrame:
     """Read the lakehouse back via duckdb (works for local layout; prod via httpfs)."""
     import duckdb
     base = base_dir or str(Path(__file__).resolve().parents[1] / "data" / "lakehouse")
+    new_glob = f"{base}/silver/transactions/dt=*/*.parquet"
+    if Path(f"{base}/silver").exists():
+        return duckdb.sql(f"SELECT * FROM read_parquet('{new_glob}', hive_partitioning=true)").df()
     return duckdb.sql(f"SELECT * FROM read_parquet('{base}/transactions/date=*/*.parquet', hive_partitioning=true)").df()

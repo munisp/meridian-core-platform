@@ -28,6 +28,9 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from meridian_events.auth import Claims, fastapi_dependency
+from meridian_events.bus import bus_from_env
+from meridian_events.envelope import new_envelope
+from meridian_events.outbox import DuckDBOutbox, OutboxRelay
 from meridian_events.problem import install_problem_handlers
 from meridian_events.store import open_store
 
@@ -55,6 +58,13 @@ with _lock:
     except Exception:  # noqa: BLE001 - column already present
         pass
 _online = open_store(DATA_DIR / "online")
+
+# Transactional outbox (audit I2): materialisation receipts are appended to
+# the meridian_outbox table in the SAME DuckDB transaction as the
+# feature_values writes, then relayed to the bus as nrs.feature.materialised.v1
+# by an OutboxRelay (started in main()). A crash can never leave features
+# written without their event.
+_outbox = DuckDBOutbox(_db, _lock)
 
 AGGS = {"last", "sum", "count", "avg", "min", "max"}
 
@@ -103,59 +113,80 @@ def _materialise(fd: FeatureDef, records: list[dict]) -> dict:
         groups.setdefault(str(ent), []).append((ts, rec))
     is_kobo = fd.is_kobo
     written = 0
-    for ent, rows in groups.items():
-        value: float | int
-        if fd.agg == "count":
-            value = len(rows) if is_kobo else float(len(rows))
-        else:
-            vals = []
-            for ts, rec in rows:
-                v = rec.get(fd.value_field) if fd.value_field else None
-                if v is None:
-                    continue
-                if is_kobo:
-                    # int64 kobo: reject floats (precision loss) and bools
-                    if isinstance(v, bool) or not isinstance(v, int):
-                        raise HTTPException(
-                            422, f"kobo feature {fd.name}: value for entity {ent} is "
-                                 f"{type(v).__name__}, must be int (int64 kobo)")
-                    vals.append((ts, v))
-                elif isinstance(v, (int, float)):
-                    vals.append((ts, float(v)))
-            if not vals:
-                continue
-            nums = [v for _, v in vals]
-            if fd.agg == "sum":
-                value = sum(nums)
-            elif fd.agg == "avg":
-                # kobo avg: integer floor division keeps exact int64 semantics
-                value = sum(nums) // len(nums) if is_kobo else sum(nums) / len(nums)
-            elif fd.agg == "min":
-                value = min(nums)
-            elif fd.agg == "max":
-                value = max(nums)
-            else:  # last: latest by ts
-                value = max(vals, key=lambda x: x[0])[1]
-        with _lock:
-            if is_kobo:
-                _db.execute(
-                    "INSERT INTO feature_values (entity, name, value_kobo, ts) VALUES (?,?,?,?)",
-                    [ent, fd.name, int(value), now])
+    receipt = {"feature": fd.name, "agg": fd.agg, "kobo": is_kobo}
+    # One transaction: domain writes + outbox append commit atomically.
+    with _lock:
+        _db.execute("BEGIN TRANSACTION")
+    try:
+        for ent, rows in groups.items():
+            value: float | int
+            if fd.agg == "count":
+                value = len(rows) if is_kobo else float(len(rows))
             else:
-                _db.execute(
-                    "INSERT INTO feature_values (entity, name, value, ts) VALUES (?,?,?,?)",
-                    [ent, fd.name, float(value), now])
-            col = "value_kobo" if is_kobo else "value"
-            latest = _db.execute(
-                f"SELECT {col}, ts FROM feature_values WHERE entity=? AND name=? "
-                "ORDER BY ts DESC LIMIT 1", [ent, fd.name]).fetchone()
-        if latest:
-            payload = {"entity": ent, "name": fd.name, "ts": latest[1],
-                       ("value_kobo" if is_kobo else "value"): latest[0]}
-            _online.put("online", f"{ent}:{fd.name}", payload)
-        written += 1
+                vals = []
+                for ts, rec in rows:
+                    v = rec.get(fd.value_field) if fd.value_field else None
+                    if v is None:
+                        continue
+                    if is_kobo:
+                        # int64 kobo: reject floats (precision loss) and bools
+                        if isinstance(v, bool) or not isinstance(v, int):
+                            raise HTTPException(
+                                422, f"kobo feature {fd.name}: value for entity {ent} is "
+                                     f"{type(v).__name__}, must be int (int64 kobo)")
+                        vals.append((ts, v))
+                    elif isinstance(v, (int, float)):
+                        vals.append((ts, float(v)))
+                if not vals:
+                    continue
+                nums = [v for _, v in vals]
+                if fd.agg == "sum":
+                    value = sum(nums)
+                elif fd.agg == "avg":
+                    # kobo avg: integer floor division keeps exact int64 semantics
+                    value = sum(nums) // len(nums) if is_kobo else sum(nums) / len(nums)
+                elif fd.agg == "min":
+                    value = min(nums)
+                elif fd.agg == "max":
+                    value = max(nums)
+                else:  # last: latest by ts
+                    value = max(vals, key=lambda x: x[0])[1]
+            with _lock:
+                if is_kobo:
+                    _db.execute(
+                        "INSERT INTO feature_values (entity, name, value_kobo, ts) VALUES (?,?,?,?)",
+                        [ent, fd.name, int(value), now])
+                else:
+                    _db.execute(
+                        "INSERT INTO feature_values (entity, name, value, ts) VALUES (?,?,?,?)",
+                        [ent, fd.name, float(value), now])
+                col = "value_kobo" if is_kobo else "value"
+                latest = _db.execute(
+                    f"SELECT {col}, ts FROM feature_values WHERE entity=? AND name=? "
+                    "ORDER BY ts DESC LIMIT 1", [ent, fd.name]).fetchone()
+            if latest:
+                payload = {"entity": ent, "name": fd.name, "ts": latest[1],
+                           ("value_kobo" if is_kobo else "value"): latest[0]}
+                _online.put("online", f"{ent}:{fd.name}", payload)
+            written += 1
+        # outbox append INSIDE the same transaction as the feature writes
+        receipt["entities_written"] = written
+        env = new_envelope("nrs.feature.materialised.v1", SERVICE, receipt)
+        _outbox.append("nrs.feature.materialised.v1", env)
+        with _lock:
+            _db.execute("COMMIT")
+    except BaseException:
+        with _lock:
+            _db.execute("ROLLBACK")
+        raise
     return {"feature": fd.name, "entities_written": written, "agg": fd.agg,
             "kobo": is_kobo}
+
+
+def flush_outbox_once(bus=None) -> int:
+    # Drain pending outbox rows to the bus once (tests / manual drive).
+    relay = OutboxRelay(_outbox, bus or bus_from_env(), DATA_DIR / "outbox-ckpt")
+    return relay.flush_once()
 
 
 @app.get("/healthz")
@@ -215,7 +246,13 @@ def batch(req: BatchRequest, claims: Claims = Depends(fastapi_dependency())) -> 
 def main() -> None:  # pragma: no cover
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8012")))
+    # outbox relay: drain meridian_outbox -> bus (nrs.feature.materialised.v1)
+    relay = OutboxRelay(_outbox, bus_from_env(), DATA_DIR / "outbox-ckpt")
+    relay.start()
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8012")))
+    finally:
+        relay.stop()
 
 
 if __name__ == "__main__":  # pragma: no cover
