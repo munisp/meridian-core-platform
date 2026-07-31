@@ -1,5 +1,5 @@
 {
-  "_comment": "Consumer lockfile: pinned rp-* versions for core-platform consumers. sha256 filled by the ceremony in meridian-rule-packs (tools/ceremony.py); values below are [seed] pins at 1.0.0.",
+  "_comment": "Consumer lockfile: pinned rp-* versions for core-platform consumers. sha256 filled by the ceremony in meridian-rule-packs (tools/ceremony.py); values below are [seed] pins at 1.0.0. sha256 = hash of the canonical pack JSON (signed block removed); signature = ed25519 over the pin by key_id meridian-ceremony-dev-001 [seed dev key — replace via the real ceremony].",
   "pins": {
     "rp-ubl-bis": {
       "version": "1.0.0",
@@ -13,7 +13,7 @@
     },
     "rp-wht-2024": {
       "version": "1.0.0",
-      "sha256": null,
+      "sha256": "889e2cb3b54f255b9680c503fa90328ee5863b8c999ad48d428a6ee33029edf2",
       "subject_to_regazette": true
     },
     "rp-tp-2018": {
@@ -73,17 +73,17 @@
     },
     "rp-vat-rates": {
       "version": "1.0.0",
-      "sha256": null,
+      "sha256": "41aae5553ac9e785afb664994d12e9721897ee3188e9db4b5138b65c0e3e2921",
       "subject_to_regazette": true
     },
     "rp-vat-exempt-basket": {
       "version": "1.0.0",
-      "sha256": null,
+      "sha256": "7e1b3dced17aa9387e9a5e1ba2c0374365f7e5f9e791429477892b8b2a931826",
       "subject_to_regazette": true
     },
     "rp-vat-zerorated-basket": {
       "version": "1.0.0",
-      "sha256": null,
+      "sha256": "259c3ab6091389d0e82dd280189043d86698c0f29286c29f4a9c2e1cf1e0dd3f",
       "subject_to_regazette": true
     },
     "rp-vat-attribution-mode": {
@@ -173,7 +173,7 @@
     },
     "rp-bank-thresholds": {
       "version": "1.0.0",
-      "sha256": null,
+      "sha256": "3feab9a7164f00bd331b39cbb242e63564027d0c4bcb6761851cf1e5a0e1d148",
       "subject_to_regazette": true
     }
   }
