@@ -1,0 +1,132 @@
+openapi: 3.1.0
+info:
+  title: Meridian Ledger API
+  version: 1.0.0
+  description: |
+    Double-entry ledger (meridian-core-platform/services/ledger): TigerBeetle-style
+    accounts and transfers incl. pending (two-phase) transfers. Amounts are kobo.
+servers:
+  - url: http://localhost:8002
+paths:
+  /healthz:
+    get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }
+  /v1/accounts:
+    post:
+      summary: Create accounts (batch)
+      parameters: [ { $ref: '#/components/parameters/idempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ accounts ]
+              properties:
+                accounts: { type: array, items: { $ref: '#/components/schemas/AccountCreate' } }
+      responses:
+        '201': { description: Created (per-account results) }
+    get:
+      summary: List accounts
+      responses:
+        '200': { description: Accounts, content: { application/json: { schema: { type: object, properties: { accounts: { type: array, items: { $ref: '#/components/schemas/Account' } } } } } } }
+  /v1/accounts/{id}/balance:
+    get:
+      summary: Derived balance view (posted net / available)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Balance, content: { application/json: { schema: { $ref: '#/components/schemas/Balance' } } } }
+        '404': { description: Unknown account }
+  /v1/transfers:
+    post:
+      summary: Create a posted double-entry transfer
+      parameters: [ { $ref: '#/components/parameters/idempotencyKey' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TransferCreate' } } }
+      responses:
+        '201': { description: Transfer, content: { application/json: { schema: { $ref: '#/components/schemas/Transfer' } } } }
+        '422': { description: Rejected (e.g. insufficient funds / result code) }
+    get:
+      summary: List transfers
+      responses:
+        '200': { description: Transfers }
+  /v1/transfers/pending:
+    post:
+      summary: Create a pending (two-phase) transfer reserving funds
+      parameters: [ { $ref: '#/components/parameters/idempotencyKey' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TransferCreate' } } }
+      responses:
+        '201': { description: Pending transfer }
+  /v1/transfers/{id}/post:
+    post:
+      summary: Post (settle) a pending transfer
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Posted }
+        '404': { description: Unknown pending transfer }
+  /v1/transfers/{id}/void:
+    post:
+      summary: Void a pending transfer (release reservation)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Voided }
+        '404': { description: Unknown pending transfer }
+components:
+  parameters:
+    idempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string }
+  schemas:
+    AccountCreate:
+      type: object
+      required: [ id, ledger, code ]
+      properties:
+        id: { type: string, description: 'Namespace-prefixed account id (e.g. 700000000001-...)' }
+        ledger: { type: integer, description: 'Ledger number (e.g. 700 commissions)' }
+        code: { type: integer, description: 'Posting code class' }
+        flags: { type: integer }
+        user_data: { type: string, description: 'Metadata key, never PII' }
+    Account:
+      allOf:
+        - $ref: '#/components/schemas/AccountCreate'
+        - type: object
+          properties:
+            debits_pending: { type: integer }
+            debits_posted: { type: integer }
+            credits_pending: { type: integer }
+            credits_posted: { type: integer }
+            created_at: { type: string, format: date-time }
+    Balance:
+      type: object
+      properties:
+        account_id: { type: string }
+        debits_pending: { type: integer }
+        debits_posted: { type: integer }
+        credits_pending: { type: integer }
+        credits_posted: { type: integer }
+        posted_net: { type: integer, description: 'credits_posted - debits_posted (kobo)' }
+        available: { type: integer, description: 'posted_net - debits_pending (kobo)' }
+    TransferCreate:
+      type: object
+      required: [ debit_account_id, credit_account_id, amount, ledger, code ]
+      properties:
+        debit_account_id: { type: string }
+        credit_account_id: { type: string }
+        amount: { type: integer, description: 'kobo' }
+        ledger: { type: integer }
+        code: { type: integer }
+        user_data: { type: string }
+    Transfer:
+      allOf:
+        - $ref: '#/components/schemas/TransferCreate'
+        - type: object
+          properties:
+            id: { type: string }
+            pending: { type: boolean }
+            pending_id: { type: string }
+            resolved: { type: boolean }
+            created_at: { type: string, format: date-time }

@@ -1,0 +1,76 @@
+openapi: 3.1.0
+info:
+  title: Meridian Rule-Pack Registry API
+  version: 1.0.0
+  description: Signed rule-pack registry with semver versioning, board-gated publish and consumer staleness tracking (meridian-core-platform/services/rp-registry).
+servers: [ { url: http://localhost:8007 } ]
+paths:
+  /healthz:
+    get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }
+  /v1/packs:
+    post:
+      summary: Register a rule pack version (draft)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ id, version, rules ]
+              properties:
+                id: { type: string, pattern: '^rp-[a-z0-9][a-z0-9-]*$' }
+                version: { type: string, description: semver }
+                rules: { type: array, items: { type: object } }
+                effective_from: { type: string, format: date }
+      responses:
+        '201': { description: Registered pack }
+    get:
+      summary: List packs
+      responses:
+        '200': { description: Packs }
+  /v1/packs/{id}/latest:
+    get:
+      summary: Latest published (or in-force) version of a pack
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Pack }
+        '404': { description: Not found }
+  /v1/packs/{id}/{version}:
+    get:
+      summary: Specific pack version
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: version, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Pack }
+        '404': { description: Not found }
+  /v1/packs/{id}/{version}/publish:
+    post:
+      summary: Publish a draft (board role required)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: version, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Published }
+        '403': { description: Requires board role }
+  /v1/consumers:
+    post:
+      summary: Register a pack consumer (version pinning for staleness)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ consumer, pack_id, version ]
+              properties:
+                consumer: { type: string }
+                pack_id: { type: string }
+                version: { type: string }
+      responses:
+        '201': { description: Registered }
+  /v1/consumers/stale:
+    get:
+      summary: Consumers pinned to superseded pack versions
+      responses:
+        '200': { description: Stale consumers }

@@ -1,0 +1,241 @@
+openapi: 3.1.0
+info:
+  title: Meridian tin-graph API
+  version: 1.1.0
+  description: |
+    Identity/TIN graph (meridian-core-platform/services/tin-graph): NIN=TIN and
+    CAC-RC=TIN fusion, NIMC/CAC verification (simulators in dev, fail-closed
+    adapters in prod), entity resolution and business KYB (directors/UBOs).
+servers:
+  - url: http://localhost:8003
+paths:
+  /healthz:
+    get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }
+  /v1/tin/provision:
+    post:
+      summary: Provision a TIN (idempotent fusion). Accepts an optional full company KYB profile.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProvisionRequest' }
+      responses:
+        '200': { description: Existing entity (fusion idempotent) }
+        '201':
+          description: Provisioned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entity: { $ref: '#/components/schemas/Entity' }
+                  tin: { type: string }
+                  tin_hash: { type: string }
+                  ubos: { type: array, items: { $ref: '#/components/schemas/UBO' } }
+        '400': { description: Invalid NIN/RC }
+  /v1/verify/tin:
+    post:
+      summary: Verify a TIN exists
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [ tin ], properties: { tin: { type: string } } } } }
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  tin_hash: { type: string }
+                  entity_id: { type: string }
+                  entity_type: { type: string }
+  /v1/verify/nin:
+    post:
+      summary: Verify a NIN against NIMC
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [ nin ], properties: { nin: { type: string } } } } }
+      responses:
+        '200':
+          description: NIMC result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nin: { type: string }
+                  valid: { type: boolean }
+                  verified: { type: boolean }
+                  first_name: { type: string }
+                  last_name: { type: string }
+                  dob: { type: string }
+                  provider: { type: string, description: 'nimc_api | nimc-simulator [simulated]' }
+  /v1/verify/cac:
+    post:
+      summary: Verify a CAC RC number
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [ rc_number ], properties: { rc_number: { type: string } } } } }
+      responses:
+        '200':
+          description: CAC result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rc_number: { type: string }
+                  valid: { type: boolean }
+                  verified: { type: boolean }
+                  company_name: { type: string }
+                  status: { type: string }
+                  provider: { type: string, description: 'cac_api | cac-simulator [simulated]' }
+  /v1/entities/resolve:
+    post:
+      summary: Resolve an entity by fuzzy attributes (rp-identity-match-thresholds)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                phone: { type: string }
+                email: { type: string }
+                address: { type: string }
+                nin: { type: string }
+                tin: { type: string }
+      responses:
+        '200': { description: Decision + candidates }
+  /v1/entities/{id}/graph:
+    get:
+      summary: Entity graph neighbourhood
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { description: Graph view }
+        '404': { description: Not found }
+  /v1/entities/{id}/ubos:
+    get:
+      summary: Directors + derived/declared UBOs (>25%) for a company entity
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200':
+          description: UBO view
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entity_id: { type: string }
+                  entity_type: { type: string }
+                  cac_rc: { type: string }
+                  ubos: { type: array, items: { $ref: '#/components/schemas/UBO' } }
+                  directors: { type: array, items: { $ref: '#/components/schemas/Director' } }
+                  ubo_threshold_percent: { type: number, example: 25 }
+                  registry_cross_check: { type: string }
+        '404': { description: Not found }
+  /v1/entities/{id}/kyb:
+    post:
+      summary: Attach/refresh the KYB profile on a company entity (UBOs re-derived)
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CompanyProfile' } } }
+      responses:
+        '200': { description: Updated entity + UBOs }
+        '404': { description: Not found }
+  /v1/taxpayer360/{tin_hash}:
+    get:
+      summary: Cross-domain taxpayer 360 view
+      parameters: [ { name: tin_hash, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Taxpayer 360 }
+  /v1/config/match-thresholds:
+    get:
+      summary: Effective identity-match thresholds
+      responses:
+        '200': { description: Match config }
+components:
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    PersonRef:
+      type: object
+      required: [ name ]
+      properties:
+        name: { type: string }
+        dob: { type: string, description: YYYY-MM-DD }
+        nin_hash: { type: string, description: 'Pseudonymised; raw NIN never stored' }
+        id_doc_ref: { type: string, description: 'Document id in the onboarding WORM store' }
+    Director:
+      allOf:
+        - $ref: '#/components/schemas/PersonRef'
+        - type: object
+          properties:
+            role: { type: string, enum: [ director, company_secretary, chairman ] }
+            share_percent: { type: number }
+    Shareholder:
+      allOf:
+        - $ref: '#/components/schemas/PersonRef'
+        - type: object
+          properties:
+            share_percent: { type: number }
+            via_entity: { type: string }
+    UBO:
+      allOf:
+        - $ref: '#/components/schemas/PersonRef'
+        - type: object
+          properties:
+            share_percent: { type: number }
+            via_entity: { type: string }
+            source: { type: string, enum: [ declared, derived ] }
+    CompanyProfile:
+      type: object
+      required: [ company_name, rc_number ]
+      properties:
+        company_name: { type: string }
+        rc_number: { type: string }
+        incorporation_date: { type: string }
+        registered_address: { type: string }
+        share_capital_kobo: { type: integer }
+        status: { type: string }
+        directors: { type: array, items: { $ref: '#/components/schemas/Director' } }
+        shareholders: { type: array, items: { $ref: '#/components/schemas/Shareholder' } }
+        registry_cross_check: { type: string, description: 'cac_api | cac-simulator [simulated]' }
+    ProvisionRequest:
+      type: object
+      properties:
+        nin: { type: string }
+        cac_rc: { type: string }
+        entity_type: { type: string, enum: [ individual, company ] }
+        name: { type: string }
+        phone: { type: string }
+        email: { type: string }
+        address: { type: string }
+        attrs: { type: object, additionalProperties: { type: string } }
+        company: { $ref: '#/components/schemas/CompanyProfile' }
+    Entity:
+      type: object
+      properties:
+        id: { type: string }
+        tin: { type: string }
+        tin_hash: { type: string }
+        nin_hash: { type: string }
+        cac_rc: { type: string }
+        entity_type: { type: string, enum: [ individual, company ] }
+        name: { type: string }
+        phone: { type: string }
+        email: { type: string }
+        address: { type: string }
+        directors: { type: array, items: { $ref: '#/components/schemas/Director' } }
+        shareholders: { type: array, items: { $ref: '#/components/schemas/Shareholder' } }
+        ubos: { type: array, items: { $ref: '#/components/schemas/UBO' } }
+        registry_cross_check: { type: string }
+        created_at: { type: string, format: date-time }

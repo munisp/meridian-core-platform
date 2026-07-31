@@ -1,0 +1,81 @@
+openapi: 3.1.0
+info:
+  title: Meridian Consent API
+  version: 1.0.0
+  description: NDPA consent capture/revoke/renew with HMAC-signed receipts (meridian-core-platform/services/consent).
+servers: [ { url: http://localhost:8006 } ]
+paths:
+  /healthz:
+    get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }
+  /v1/consents:
+    post:
+      summary: Capture consent (or denial)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ subject, purpose ]
+              properties:
+                subject: { type: string, description: 'Pseudonymised subject (tin_hash/nin_hash)' }
+                purpose: { type: string }
+                lawful_basis: { type: string, enum: [ consent, contract, legal_obligation, vital_interest, public_task, legitimate_interest ] }
+                granted: { type: boolean }
+                channel: { type: string }
+                metadata: { type: object }
+                expires_at: { type: string, format: date-time }
+      responses:
+        '201': { description: Consent + receipt, content: { application/json: { schema: { $ref: '#/components/schemas/Consent' } } } }
+  /v1/consents/{subject}:
+    get:
+      summary: Consents for a subject
+      parameters: [ { name: subject, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Consents }
+  /v1/consents/{id}/revoke:
+    post:
+      summary: Revoke a consent (receipt issued)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Revoked consent }
+        '404': { description: Not found }
+  /v1/consents/{id}/renew:
+    post:
+      summary: Renew an expiring consent
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Renewed consent }
+  /v1/receipts/{id}:
+    get:
+      summary: Verify an HMAC-signed consent receipt
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Receipt, content: { application/json: { schema: { $ref: '#/components/schemas/Receipt' } } } }
+components:
+  schemas:
+    Consent:
+      type: object
+      properties:
+        id: { type: string }
+        subject: { type: string }
+        purpose: { type: string }
+        lawful_basis: { type: string }
+        granted: { type: boolean }
+        channel: { type: string }
+        metadata: { type: object }
+        granted_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time }
+        status: { type: string, enum: [ active, revoked, expired ] }
+    Receipt:
+      type: object
+      properties:
+        receipt_id: { type: string }
+        consent_id: { type: string }
+        subject: { type: string }
+        action: { type: string, enum: [ granted, denied, revoked, renewed ] }
+        time: { type: string, format: date-time }
+        actor: { type: string }
+        sha256: { type: string }
+        hmac: { type: string }

@@ -1,0 +1,45 @@
+openapi: 3.1.0
+info:
+  title: Meridian Rules Engine API
+  version: 1.0.0
+  description: Deterministic rule-pack evaluation with decision traces (meridian-core-platform/services/rules-engine, FastAPI).
+servers: [ { url: http://localhost:8005 } ]
+paths:
+  /healthz:
+    get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }
+  /v1/evaluate:
+    post:
+      summary: Evaluate a rule pack against a context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EvaluateRequest' }
+      responses:
+        '200': { description: Evaluation, content: { application/json: { schema: { $ref: '#/components/schemas/EvaluateResponse' } } } }
+        '403': { description: Pack integrity error }
+        '404': { description: Pack not found }
+  /v1/packs:
+    get:
+      summary: Loaded packs
+      responses:
+        '200': { description: Packs }
+components:
+  schemas:
+    EvaluateRequest:
+      type: object
+      required: [ pack_id ]
+      properties:
+        pack_id: { type: string, pattern: '^rp-[a-z0-9][a-z0-9-]*$' }
+        version: { type: string, nullable: true, description: 'semver or null/latest' }
+        filing_date: { type: string, nullable: true, description: 'ISO yyyy-mm-dd; selects version in force' }
+        context: { type: object }
+    EvaluateResponse:
+      type: object
+      properties:
+        pack: { type: string }
+        pack_status: { type: string, nullable: true }
+        subject_to_regazette: { type: boolean }
+        matched: { type: boolean }
+        decision: { type: object, nullable: true }
+        trace: { type: array, items: { type: object } }
