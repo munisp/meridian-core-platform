@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridian.nrs/schemas/nrs.ml.scored.v1.schema.json",
+  "title": "ML scored-event payload (data of nrs.ml.scored.v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["entity_hash", "model", "scoring_ok"],
+  "properties": {
+    "event_id": {"type": "string"},
+    "entity_hash": {"type": "string"},
+    "model": {"type": "string"},
+    "score": {"type": ["number", "null"]},
+    "model_version": {"type": ["string", "null"]},
+    "amount_kobo": {"type": ["integer", "null"], "minimum": 0},
+    "scoring_ok": {"type": "boolean"}
+  }
+}

@@ -74,6 +74,11 @@ func OpenPg(ctx context.Context, databaseURL string) (*PgStore, error) {
 		pool.Close()
 		return nil, fmt.Errorf("store pg: migrate: %w", err)
 	}
+	// Transactional outbox table (audit I2) — idempotent.
+	if _, err := pool.Exec(ctx, PgOutboxDDL); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("store pg: outbox migrate: %w", err)
+	}
 	return &PgStore{pool: pool}, nil
 }
 

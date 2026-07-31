@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridian.nrs/schemas/nrs.pos.receipt.v1.schema.json",
+  "title": "T6 POS receipt payload (data of nrs.pos.receipt.v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "reference": {"type": "string"},
+    "amount_kobo": {"type": "integer", "minimum": 0},
+    "tin_hash": {"type": "string", "minLength": 64, "maxLength": 64}
+  }
+}

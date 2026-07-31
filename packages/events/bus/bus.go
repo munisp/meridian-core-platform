@@ -32,30 +32,43 @@ type Bus interface {
 //	EVENT_BUS=kafka             -> PandaproxyBus using KAFKA_PROXY_URL
 //	                               (default http://localhost:8082)
 func NewFromEnv() Bus {
+	var b Bus
 	// Prod profile: KAFKA_BROKERS set -> real franz-go client (HARDENING H3).
 	if os.Getenv("KAFKA_BROKERS") != "" {
 		if kb, err := NewKafkaFromEnv(); err != nil {
 			log.Printf("profile=dev component=bus kafka init failed (%v); inproc fallback", err)
 		} else {
 			log.Printf("profile=prod component=bus brokers=%s", os.Getenv("KAFKA_BROKERS"))
-			return kb
+			return maybeValidating(kb)
 		}
 	}
 	switch os.Getenv("EVENT_BUS") {
 	case "", "inproc":
 		log.Printf("profile=dev component=bus inproc")
-		return NewInproc()
+		b = NewInproc()
 	case "kafka":
 		proxy := os.Getenv("KAFKA_PROXY_URL")
 		if proxy == "" {
 			proxy = "http://localhost:8082"
 		}
 		log.Printf("bus: EVENT_BUS=kafka via Redpanda pandaproxy at %s (KAFKA_BROKERS=%s)", proxy, os.Getenv("KAFKA_BROKERS"))
-		return NewPandaproxy(proxy)
+		b = NewPandaproxy(proxy)
 	default:
 		log.Printf("bus: unknown EVENT_BUS=%q, falling back to inproc", os.Getenv("EVENT_BUS"))
-		return NewInproc()
+		b = NewInproc()
 	}
+	return maybeValidating(b)
+}
+
+// maybeValidating wraps the bus with ValidateBeforePublish when a hook is
+// installed (see SetPublishValidator).
+func maybeValidating(b Bus) Bus {
+	validatorMu.RLock()
+	defer validatorMu.RUnlock()
+	if publishValidator == nil {
+		return b
+	}
+	return NewValidating(b)
 }
 
 // --- In-process bus (dev default, also the outbox relay target in dev) ---

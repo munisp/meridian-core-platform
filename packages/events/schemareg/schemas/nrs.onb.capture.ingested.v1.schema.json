@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridian.nrs/schemas/nrs.onb.capture.ingested.v1.schema.json",
+  "title": "Agent capture ingested payload (data of nrs.onb.capture.ingested.v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "client_ref": {"type": "string"},
+    "agent_id": {"type": "string"},
+    "operator_id": {"type": "string"},
+    "count": {"type": "integer", "minimum": 0}
+  }
+}

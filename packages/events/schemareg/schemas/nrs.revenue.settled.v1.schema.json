@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridian.nrs/schemas/nrs.revenue.settled.v1.schema.json",
+  "title": "Revenue settled payload (data of nrs.revenue.settled.v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "settlement_id": {"type": "string"},
+    "amount_kobo": {"type": "integer", "minimum": 0},
+    "rail": {"type": "string"},
+    "tin_hash": {"type": "string"}
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridian.nrs/schemas/nrs.feature.materialised.v1.schema.json",
+  "title": "Feature materialisation receipt (data of nrs.feature.materialised.v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["feature", "entities_written"],
+  "properties": {
+    "feature": {"type": "string"},
+    "entities_written": {"type": "integer", "minimum": 0},
+    "agg": {"type": "string"},
+    "kobo": {"type": "boolean"}
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridian.nrs/schemas/nrs.onb.provisioned.v1.schema.json",
+  "title": "TIN provisioned payload (data of nrs.onb.provisioned.v1 / nrs.onb.tin.provisioned.v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["operator_id"],
+  "properties": {
+    "operator_id": {"type": "string"},
+    "tin_hash": {"type": "string"},
+    "status": {"type": "string", "enum": ["registered", "nin_verified", "tin_provisioned", "graduated"]}
+  }
+}
