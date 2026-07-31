@@ -144,6 +144,15 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /v1/entities/{id}/ubos", s.entityUBOs)
 	mux.HandleFunc("POST /v1/entities/{id}/kyb", s.updateKYB)
 	mux.HandleFunc("GET /v1/taxpayer360/{tin_hash}", s.taxpayer360Handler) // I1
+	// M2: TIN dedup/merge lifecycle (merge.go) — officer-gated, 409 on
+	// illegal lifecycle transitions, unmerge reversible within window.
+	mux.HandleFunc("POST /v1/tins/merge", s.mergeTINs)
+	mux.HandleFunc("POST /v1/tins/unmerge", s.unmergeTINs)
+	mux.HandleFunc("POST /v1/tins/{tin}/status", s.setLifecycle)
+	mux.HandleFunc("GET /v1/tins/{tin}/status", s.getLifecycle)
+	mux.HandleFunc("GET /v1/tins/{tin}/filing-eligibility", s.filingEligibility)
+	mux.HandleFunc("POST /v1/dedup/scan", s.dedupScan)
+	mux.HandleFunc("GET /v1/dedup/candidates", s.dedupCandidates)
 	mux.HandleFunc("GET /v1/config/match-thresholds", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, s.cfg)
 	})
