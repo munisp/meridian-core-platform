@@ -1,0 +1,71 @@
+# inclusion namespace (SPEC C section 3): USSD gateway + PWA api may ONLY
+# call core-platform public APIs (L7 rule: POST|GET ^/v1/).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: default-deny
+  namespace: inclusion
+spec:
+  endpointSelector: {}
+  ingress:
+    - {}
+  egress:
+    - {}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-inclusion-dns
+  namespace: inclusion
+spec:
+  endpointSelector: {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - {port: "53", protocol: ANY}
+          rules:
+            dns:
+              - matchPattern: "*"
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: inclusion-egress
+  namespace: inclusion
+spec:
+  endpointSelector: {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: meridian-core
+            app: apisix
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+              rules:
+                http:
+                  - method: "POST|GET"
+                    path: "^/v1/"
+---
+# Ingress to inclusion: USSD gateway traffic from telco aggregator IPs and
+# prometheus scrapes; telco CIDRs injected at deploy time.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-inclusion-ingress
+  namespace: inclusion
+spec:
+  endpointSelector: {}
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: monitoring
+            app: prometheus
+      toPorts:
+        - ports:
+            - {port: "9090", protocol: TCP}

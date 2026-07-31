@@ -1,0 +1,109 @@
+# CiliumNetworkPolicies for namespace meridian-core (SPEC C section 3).
+# Default-deny baseline + explicit allows. Identity (SPIFFE/mTLS) still
+# authenticates; CNP restricts reachability — both layers enforced.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: default-deny
+  namespace: meridian-core
+spec:
+  endpointSelector: {}
+  ingress:
+    - {}
+  egress:
+    - {}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-core-dns
+  namespace: meridian-core
+spec:
+  endpointSelector: {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - {port: "53", protocol: ANY}
+          rules:
+            dns:
+              - matchPattern: "*"
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-core-egress
+  namespace: meridian-core
+spec:
+  endpointSelector: {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kafka
+      toPorts:
+        - ports:
+            - {port: "9092", protocol: TCP}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: data
+            app: postgres
+      toPorts:
+        - ports:
+            - {port: "5432", protocol: TCP}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: data
+            app: tigerbeetle
+      toPorts:
+        - ports:
+            - {port: "3000", protocol: TCP}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: data
+            app: opensearch
+      toPorts:
+        - ports:
+            - {port: "9200", protocol: TCP}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: data
+            app: minio
+      toPorts:
+        - ports:
+            - {port: "9000", protocol: TCP}
+    - toEndpoints:
+        - matchLabels:
+            io.cilium.k8s.policy.serviceaccount: keycloak
+            k8s:io.kubernetes.pod.namespace: platform-auth
+      toPorts:
+        - ports:
+            - {port: "8443", protocol: TCP}
+    # SMS gateway — only the notification service may resolve/connect
+    # (scoped via endpointSelector on a separate policy below would be
+    # stricter; spec places the toFQDNs rule on core egress).
+    - toFQDNs:
+        - matchName: api.notifications.ng
+---
+# Ingress: from APISIX (meridian-core), inclusion zone via apisix, and
+# monitoring scrapes.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-core-ingress
+  namespace: meridian-core
+spec:
+  endpointSelector: {}
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: meridian-core
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: monitoring
+            app: prometheus
+      toPorts:
+        - ports:
+            - {port: "9090", protocol: TCP}
