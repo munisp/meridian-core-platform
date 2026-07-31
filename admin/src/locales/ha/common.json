@@ -1,0 +1,46 @@
+{
+  "app": {
+    "title": "Meridian",
+    "subtitle": "Kwadon Sarrafa NRS"
+  },
+  "nav": {
+    "dashboard": "Allon Sarrafawa",
+    "applications": "Aikace-aikace",
+    "rulePacks": "Kunshin Ka'idoji",
+    "gates": "Kofofi & Sa'idon Ka'ida",
+    "ledger": "Lissafi",
+    "workflows": "Tsarin Aiki",
+    "audit": "Bincike & Shaida",
+    "tenants": "Masu Haya & Shaida",
+    "flows": "Magudanan Ketare-Yanki",
+    "settings": "Saituna"
+  },
+  "actions": {
+    "signOut": "Fita",
+    "refresh": "Sabunta",
+    "cancel": "Soke",
+    "close": "Rufe",
+    "retry": "Sake gwadawa",
+    "search": "Bincika"
+  },
+  "status": {
+    "loading": "Ana dauka…",
+    "empty": "Babu abin da za a nuna tukuna",
+    "error": "An kasa isa sabis din.",
+    "offline": "Babu intanet"
+  },
+  "user": {
+    "fallback": "Mai amfani da kwado"
+  },
+  "a11y": {
+    "skipToContent": "Tsallaka zuwa abun ciki",
+    "primaryNav": "Farko"
+  },
+  "lang": {
+    "label": "Harshe",
+    "en": "English",
+    "ha": "Hausa",
+    "yo": "Yorùbá",
+    "ig": "Igbo"
+  }
+}
