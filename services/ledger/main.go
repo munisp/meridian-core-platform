@@ -51,7 +51,8 @@ func main() {
 	var client tb.LedgerClient
 	var dev *tb.DevClient
 	if os.Getenv("TIGERBEETLE_ADDRESSES") != "" {
-		if rc, err := tb.NewRealClientFromEnv(); err != nil {
+		rc, err := tb.NewRealClientFromEnv()
+		if err != nil {
 			// FAIL CLOSED (audit: prod selector set but a connect failure
 			// silently downgraded to the in-mem DevClient — the financial
 			// system of record would run on ephemeral dev state). Refuse
