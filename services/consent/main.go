@@ -128,6 +128,7 @@ func main() {
 	mux := http.NewServeMux()
 	httpx.RegisterStandard(mux, service, version, nil)
 	mux.HandleFunc("POST /v1/consents", s.create)
+	mux.HandleFunc("POST /v1/consents/check", s.check) // C1 fast path
 	mux.HandleFunc("GET /v1/consents/{subject}", s.listBySubject)
 	mux.HandleFunc("POST /v1/consents/{id}/revoke", s.revoke)
 	mux.HandleFunc("POST /v1/consents/{id}/renew", s.renew)
