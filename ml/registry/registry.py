@@ -37,7 +37,9 @@ def save_weights(obj, path: str | Path):
     """
     import torch
     buf = io.BytesIO()
-    torch.save(obj, buf)
+    # legacy serialization: avoids the zip container's long periodic padding
+    # runs in base64, keeping the artifact robust for text-only transports
+    torch.save(obj, buf, _use_new_zipfile_serialization=False)
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     p = Path(path)
     for attempt in range(5):
