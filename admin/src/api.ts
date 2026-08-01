@@ -1,4 +1,6 @@
 import axios from 'axios'
+import { isDemoMode } from './api/demo'
+import { mockAdapter } from './api/mock'
 
 // Base URL: dev vite proxy forwards /v1 → admin-api (see vite.config.ts).
 // Override with VITE_ADMIN_API_URL for direct calls.
@@ -6,6 +8,13 @@ export const api = axios.create({
   baseURL: import.meta.env.VITE_ADMIN_API_URL || '',
   timeout: 20000,
 })
+
+// Demo mode (static previews, no live admin-api): swap to the in-memory
+// mock adapter. Checked per-request so the login-page runtime toggle takes
+// effect immediately; default (non-demo) behavior is byte-for-byte unchanged.
+const liveAdapter: any = api.defaults.adapter
+api.defaults.adapter = ((config: any) =>
+  isDemoMode() ? mockAdapter(config) : (Array.isArray(liveAdapter) ? liveAdapter[0] : liveAdapter)(config)) as any
 
 const TOKEN_KEY = 'meridian.admin.token'
 const USER_KEY = 'meridian.admin.user'
