@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, fmtTime } from '../api'
 import { Tenant, User } from '../types'
 import { Badge, Modal, PageHeader } from '../components'
@@ -7,6 +8,7 @@ import Field from '../components/Field'
 interface Relation { object: string; relation: string; subject: string; plane: string }
 
 export default function Tenants() {
+  const { t: tr } = useTranslation('pages')
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [relations, setRelations] = useState<Relation[]>([])
@@ -28,7 +30,7 @@ export default function Tenants() {
     try {
       await api.post('/v1/admin/tenants', tForm)
       setShowTenant(false); setTForm({ name: '', isolation: 'row', contact_email: '' }); load()
-    } catch (ex: any) { setMsg(ex.response?.data?.detail || 'Create failed') }
+    } catch (ex: any) { setMsg(ex.response?.data?.detail || tr('tenants.createFailed')) }
   }
 
   async function toggleTenantStatus(t: Tenant) {
@@ -50,23 +52,23 @@ export default function Tenants() {
   return (
     <div>
       <PageHeader
-        title="Tenants & Identity"
-        sub="Tenant isolation levels (enclave / schema / row), console users & roles, and Permify relationship tuples."
+        title={tr('tenants.title')}
+        sub={tr('tenants.sub')}
         actions={
           <>
-            <button className="btn-secondary" onClick={() => setShowUser(true)}>New user</button>
-            <button className="btn-primary" onClick={() => setShowTenant(true)}>New tenant</button>
+            <button className="btn-secondary" onClick={() => setShowUser(true)}>{tr('tenants.newUser')}</button>
+            <button className="btn-primary" onClick={() => setShowTenant(true)}>{tr('tenants.newTenant')}</button>
           </>
         }
       />
       {msg && <div role="alert" className="mb-4 rounded-lg bg-danger border border-danger-strong px-4 py-2.5 text-sm text-danger-on">{msg}</div>}
 
       <section className="mb-8">
-        <h2 className="text-sm font-semibold text-stone-900 mb-3">Tenants</h2>
+        <h2 className="text-sm font-semibold text-stone-900 mb-3">{tr('tenants.tenantsTitle')}</h2>
         <div className="card overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr><th scope="col" className="th">Tenant</th><th scope="col" className="th">Isolation</th><th scope="col" className="th">Contact</th><th scope="col" className="th">Created</th><th scope="col" className="th">Status</th><th scope="col" className="th"></th></tr>
+              <tr><th scope="col" className="th">{tr('tenants.th.tenant')}</th><th scope="col" className="th">{tr('tenants.th.isolation')}</th><th scope="col" className="th">{tr('tenants.th.contact')}</th><th scope="col" className="th">{tr('tenants.th.created')}</th><th scope="col" className="th">{tr('tenants.th.status')}</th><th scope="col" className="th"></th></tr>
             </thead>
             <tbody>
               {tenants.map((t) => (
@@ -84,7 +86,7 @@ export default function Tenants() {
                   <td className="td"><Badge tone={t.status === 'active' ? 'green' : 'amber'}>{t.status}</Badge></td>
                   <td className="td">
                     <button className="btn-secondary text-xs" onClick={() => toggleTenantStatus(t)}>
-                      {t.status === 'active' ? 'Suspend' : 'Activate'}
+                      {t.status === 'active' ? tr('tenants.suspend') : tr('tenants.activate')}
                     </button>
                   </td>
                 </tr>
@@ -95,11 +97,11 @@ export default function Tenants() {
       </section>
 
       <section className="mb-8">
-        <h2 className="text-sm font-semibold text-stone-900 mb-3">Users & roles</h2>
+        <h2 className="text-sm font-semibold text-stone-900 mb-3">{tr('tenants.usersTitle')}</h2>
         <div className="card overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr><th scope="col" className="th">User</th><th scope="col" className="th">Roles</th><th scope="col" className="th">Tenant</th><th scope="col" className="th">Status</th></tr>
+              <tr><th scope="col" className="th">{tr('tenants.usersTh.user')}</th><th scope="col" className="th">{tr('tenants.usersTh.roles')}</th><th scope="col" className="th">{tr('tenants.usersTh.tenant')}</th><th scope="col" className="th">{tr('tenants.usersTh.status')}</th></tr>
             </thead>
             <tbody>
               {users.map((u) => (
@@ -123,11 +125,11 @@ export default function Tenants() {
       </section>
 
       <section>
-        <h2 className="text-sm font-semibold text-stone-900 mb-3">Permify relations (dev checker)</h2>
+        <h2 className="text-sm font-semibold text-stone-900 mb-3">{tr('tenants.permifyTitle')}</h2>
         <div className="card overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr><th scope="col" className="th">Object</th><th scope="col" className="th">Relation</th><th scope="col" className="th">Subject</th><th scope="col" className="th">Plane</th></tr>
+              <tr><th scope="col" className="th">{tr('tenants.permifyTh.object')}</th><th scope="col" className="th">{tr('tenants.permifyTh.relation')}</th><th scope="col" className="th">{tr('tenants.permifyTh.subject')}</th><th scope="col" className="th">{tr('tenants.permifyTh.plane')}</th></tr>
             </thead>
             <tbody>
               {relations.map((r, i) => (
@@ -143,36 +145,36 @@ export default function Tenants() {
         </div>
       </section>
 
-      <Modal open={showTenant} title="New tenant" onClose={() => setShowTenant(false)}>
+      <Modal open={showTenant} title={tr('tenants.newTenant')} onClose={() => setShowTenant(false)}>
         <form onSubmit={createTenant} className="space-y-4">
-          <Field label="Name" required>{(id) => <input id={id} className="input" required value={tForm.name} onChange={(e) => setTForm({ ...tForm, name: e.target.value })} />}</Field>
-          <Field label="Isolation level">
+          <Field label={tr('tenants.name')} required>{(id) => <input id={id} className="input" required value={tForm.name} onChange={(e) => setTForm({ ...tForm, name: e.target.value })} />}</Field>
+          <Field label={tr('tenants.isolationLevel')}>
             {(id) => (
             <select id={id} className="input" value={tForm.isolation} onChange={(e) => setTForm({ ...tForm, isolation: e.target.value })}>
-              <option value="row">row — shared schema, tenant_id discriminator</option>
-              <option value="schema">schema — dedicated schema per tenant</option>
-              <option value="enclave">enclave — fully separate environment</option>
+              <option value="row">{tr('tenants.isolationRow')}</option>
+              <option value="schema">{tr('tenants.isolationSchema')}</option>
+              <option value="enclave">{tr('tenants.isolationEnclave')}</option>
             </select>
             )}
           </Field>
-          <Field label="Contact email">{(id) => <input id={id} className="input" type="email" value={tForm.contact_email} onChange={(e) => setTForm({ ...tForm, contact_email: e.target.value })} />}</Field>
+          <Field label={tr('tenants.contactEmail')}>{(id) => <input id={id} className="input" type="email" value={tForm.contact_email} onChange={(e) => setTForm({ ...tForm, contact_email: e.target.value })} />}</Field>
           <div className="flex justify-end gap-2">
-            <button type="button" className="btn-secondary" onClick={() => setShowTenant(false)}>Cancel</button>
-            <button className="btn-primary">Create tenant</button>
+            <button type="button" className="btn-secondary" onClick={() => setShowTenant(false)}>{tr('tenants.cancel')}</button>
+            <button className="btn-primary">{tr('tenants.createTenant')}</button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={showUser} title="New user" onClose={() => setShowUser(false)}>
+      <Modal open={showUser} title={tr('tenants.newUser')} onClose={() => setShowUser(false)}>
         <form onSubmit={createUser} className="space-y-4">
-          <Field label="Name" required>{(id) => <input id={id} className="input" required value={uForm.name} onChange={(e) => setUForm({ ...uForm, name: e.target.value })} />}</Field>
-          <Field label="Email" required>{(id) => <input id={id} className="input" type="email" required value={uForm.email} onChange={(e) => setUForm({ ...uForm, email: e.target.value })} />}</Field>
-          <Field label="Roles (comma-separated)">{(id) => <input id={id} className="input" value={uForm.roles} onChange={(e) => setUForm({ ...uForm, roles: e.target.value })} placeholder="operator, auditor" />}</Field>
-          <Field label="Tenant id">{(id) => <input id={id} className="input" value={uForm.tenant_id} onChange={(e) => setUForm({ ...uForm, tenant_id: e.target.value })} placeholder="t-nrs-sovereign" />}</Field>
-          <Field label="Password (dev)">{(id) => <input id={id} className="input" value={uForm.password} onChange={(e) => setUForm({ ...uForm, password: e.target.value })} placeholder="defaults to changeme123" />}</Field>
+          <Field label={tr('tenants.name')} required>{(id) => <input id={id} className="input" required value={uForm.name} onChange={(e) => setUForm({ ...uForm, name: e.target.value })} />}</Field>
+          <Field label={tr('tenants.email')} required>{(id) => <input id={id} className="input" type="email" required value={uForm.email} onChange={(e) => setUForm({ ...uForm, email: e.target.value })} />}</Field>
+          <Field label={tr('tenants.rolesLabel')}>{(id) => <input id={id} className="input" value={uForm.roles} onChange={(e) => setUForm({ ...uForm, roles: e.target.value })} placeholder={tr('tenants.rolesPlaceholder')} />}</Field>
+          <Field label={tr('tenants.tenantId')}>{(id) => <input id={id} className="input" value={uForm.tenant_id} onChange={(e) => setUForm({ ...uForm, tenant_id: e.target.value })} placeholder={tr('tenants.tenantIdPlaceholder')} />}</Field>
+          <Field label={tr('tenants.passwordDev')}>{(id) => <input id={id} className="input" value={uForm.password} onChange={(e) => setUForm({ ...uForm, password: e.target.value })} placeholder={tr('tenants.passwordPlaceholder')} />}</Field>
           <div className="flex justify-end gap-2">
-            <button type="button" className="btn-secondary" onClick={() => setShowUser(false)}>Cancel</button>
-            <button className="btn-primary">Create user</button>
+            <button type="button" className="btn-secondary" onClick={() => setShowUser(false)}>{tr('tenants.cancel')}</button>
+            <button className="btn-primary">{tr('tenants.createUser')}</button>
           </div>
         </form>
       </Modal>
