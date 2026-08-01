@@ -1,9 +1,11 @@
 import { FormEvent, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, fmtTime, sha256Hex } from '../api'
 import { AuditEvent, EvidenceObject } from '../types'
 import { Badge, DevSeedTag, Modal, PageHeader } from '../components'
 
 export default function Audit() {
+  const { t } = useTranslation('pages')
   const [events, setEvents] = useState<AuditEvent[]>([])
   const [evSource, setEvSource] = useState('')
   const [evidence, setEvidence] = useState<EvidenceObject[]>([])
@@ -53,24 +55,24 @@ export default function Audit() {
   return (
     <div>
       <PageHeader
-        title="Audit & Evidence (WORM)"
-        sub="Append-only audit trail, write-once-read-many evidence objects with in-browser sha256 verification (WebCrypto), and technical-audit-trail assembly."
+        title={t('audit.title')}
+        sub={t('audit.sub')}
         actions={<DevSeedTag source={evSource} />}
       />
 
       <div className="grid lg:grid-cols-5 gap-6">
         <section className="lg:col-span-3">
           <form className="mb-4 flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); loadEvents() }}>
-            <label htmlFor="audit-subject" className="sr-only">Subject filter</label>
-            <input id="audit-subject" className="input max-w-[220px]" placeholder="subject contains…" value={subject} onChange={(e) => setSubject(e.target.value)} />
-            <label htmlFor="audit-type" className="sr-only">Type filter</label>
-            <input id="audit-type" className="input max-w-[200px]" placeholder="type prefix e.g. gate." value={type} onChange={(e) => setType(e.target.value)} />
-            <button className="btn-secondary">Search</button>
+            <label htmlFor="audit-subject" className="sr-only">{t('audit.subjectFilter')}</label>
+            <input id="audit-subject" className="input max-w-[220px]" placeholder={t('audit.subjectPlaceholder')} value={subject} onChange={(e) => setSubject(e.target.value)} />
+            <label htmlFor="audit-type" className="sr-only">{t('audit.typeFilter')}</label>
+            <input id="audit-type" className="input max-w-[200px]" placeholder={t('audit.typePlaceholder')} value={type} onChange={(e) => setType(e.target.value)} />
+            <button className="btn-secondary">{t('audit.search')}</button>
           </form>
           <div className="card overflow-x-auto max-h-[560px] overflow-y-auto">
             <table className="w-full">
               <thead className="sticky top-0 bg-white">
-                <tr><th scope="col" className="th">Type</th><th scope="col" className="th">Subject</th><th scope="col" className="th">Actor</th><th scope="col" className="th">Detail</th><th scope="col" className="th">Time</th></tr>
+                <tr><th scope="col" className="th">{t('audit.th.type')}</th><th scope="col" className="th">{t('audit.th.subject')}</th><th scope="col" className="th">{t('audit.th.actor')}</th><th scope="col" className="th">{t('audit.th.detail')}</th><th scope="col" className="th">{t('audit.th.time')}</th></tr>
               </thead>
               <tbody>
                 {events.map((e) => (
@@ -82,14 +84,14 @@ export default function Audit() {
                     <td className="td text-xs whitespace-nowrap">{fmtTime(e.timestamp)}</td>
                   </tr>
                 ))}
-                {events.length === 0 && <tr><td className="td text-center text-stone-600" colSpan={5}>No matching events.</td></tr>}
+                {events.length === 0 && <tr><td className="td text-center text-stone-600" colSpan={5}>{t('audit.noEvents')}</td></tr>}
               </tbody>
             </table>
           </div>
         </section>
 
         <section className="lg:col-span-2">
-          <h2 className="text-sm font-semibold text-stone-900 mb-3">WORM evidence objects</h2>
+          <h2 className="text-sm font-semibold text-stone-900 mb-3">{t('audit.wormTitle')}</h2>
           <div className="space-y-3 mb-8">
             {evidence.map((e) => (
               <button key={e.id} className="card w-full p-4 text-left hover:border-brand-300 transition-colors" onClick={() => openEvidence(e.id)}>
@@ -101,25 +103,25 @@ export default function Audit() {
                 <div className="mt-1 text-xs text-stone-600">{e.worm_uri} · {fmtTime(e.created_at)}</div>
               </button>
             ))}
-            {evidence.length === 0 && <div className="text-sm text-stone-600">No evidence objects.</div>}
+            {evidence.length === 0 && <div className="text-sm text-stone-600">{t('audit.noEvidence')}</div>}
           </div>
 
-          <h2 className="text-sm font-semibold text-stone-900 mb-3">TAT assembly</h2>
+          <h2 className="text-sm font-semibold text-stone-900 mb-3">{t('audit.tatTitle')}</h2>
           <form onSubmit={assembleTAT} className="flex gap-2">
-            <label htmlFor="tat-subject" className="sr-only">TAT subject</label>
-            <input id="tat-subject" className="input" placeholder="subject e.g. rp-wht-2024" value={tatSubject} onChange={(e) => setTatSubject(e.target.value)} />
-            <button className="btn-secondary shrink-0">Assemble</button>
+            <label htmlFor="tat-subject" className="sr-only">{t('audit.tatSubject')}</label>
+            <input id="tat-subject" className="input" placeholder={t('audit.tatPlaceholder')} value={tatSubject} onChange={(e) => setTatSubject(e.target.value)} />
+            <button className="btn-secondary shrink-0">{t('audit.assemble')}</button>
           </form>
           {tat && (
             <div className="card mt-3 p-4 max-h-56 overflow-y-auto">
-              <div className="text-xs text-stone-600 mb-2">Who saw what, when, under which rule pack — {tat.length} entries</div>
+              <div className="text-xs text-stone-600 mb-2">{t('audit.tatSummary', { count: tat.length })}</div>
               {tat.map((t) => (
                 <div key={t.id} className="text-xs py-1 border-b border-neutral-100 last:border-0">
                   <span className="font-mono text-brand-700">{t.type}</span> · {t.actor} · {fmtTime(t.timestamp)}
                   {t.rule_pack_version && <span className="text-stone-600"> · {t.rule_pack_version}</span>}
                 </div>
               ))}
-              {tat.length === 0 && <div className="text-xs text-stone-600">No entries for this subject.</div>}
+              {tat.length === 0 && <div className="text-xs text-stone-600">{t('audit.noTatEntries')}</div>}
             </div>
           )}
         </section>
@@ -130,15 +132,15 @@ export default function Audit() {
           <div className="space-y-3">
             <div className="flex flex-wrap gap-2">
               <Badge tone="clay">{selected.kind}</Badge>
-              <Badge tone={selected.immutable ? 'green' : 'amber'}>{selected.immutable ? 'immutable (WORM)' : 'mutable'}</Badge>
+              <Badge tone={selected.immutable ? 'green' : 'amber'}>{selected.immutable ? t('audit.immutable') : t('audit.mutable')}</Badge>
             </div>
             <div className="text-xs text-stone-600 font-mono break-all">{selected.worm_uri}</div>
             <pre className="max-h-64 overflow-auto rounded-lg bg-neutral-50 border border-neutral-200 p-4 text-xs font-mono whitespace-pre-wrap">{selected.content}</pre>
             <div className="font-mono text-xs text-stone-600 break-all">sha256: {selected.sha256}</div>
             <div className="flex items-center gap-3">
-              <button className="btn-primary text-xs" onClick={verifyHash}>Verify in browser (WebCrypto)</button>
-              {verify === 'ok' && <Badge tone="green">hash matches — integrity confirmed</Badge>}
-              {verify === 'fail' && <Badge tone="red">HASH MISMATCH — do not trust this object</Badge>}
+              <button className="btn-primary text-xs" onClick={verifyHash}>{t('audit.verify')}</button>
+              {verify === 'ok' && <Badge tone="green">{t('audit.hashOk')}</Badge>}
+              {verify === 'fail' && <Badge tone="red">{t('audit.hashFail')}</Badge>}
             </div>
           </div>
         )}

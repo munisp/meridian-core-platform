@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, fmtTime } from '../api'
 import { Badge, DevSeedTag, PageHeader } from '../components'
 
@@ -7,6 +8,7 @@ interface NotifProvider { channel: string; provider: string; mode: string; statu
 interface RouteRow { plane: string; path: string; upstream: string; methods: string; auth: string }
 
 export default function Settings() {
+  const { t } = useTranslation('pages')
   const [flags, setFlags] = useState<Record<string, boolean>>({})
   const [keys, setKeys] = useState<APIKey[]>([])
   const [providers, setProviders] = useState<NotifProvider[]>([])
@@ -39,8 +41,8 @@ export default function Settings() {
     setWaf(mode)
     try {
       await api.post('/v1/admin/settings/waf-mode', { mode })
-      setMsg(`WAF mode → ${mode}`)
-    } catch { setMsg('WAF mode change failed (requires admin role)') }
+      setMsg(t('settings.wafChanged', { mode }))
+    } catch { setMsg(t('settings.wafFailed')) }
   }
 
   async function createKey(e: FormEvent) {
@@ -50,7 +52,7 @@ export default function Settings() {
       setSecretOnce(data.secret_once)
       setKeyName('')
       load()
-    } catch (ex: any) { setMsg(ex.response?.data?.detail || 'Key create failed') }
+    } catch (ex: any) { setMsg(ex.response?.data?.detail || t('settings.keyCreateFailed')) }
   }
 
   async function revokeKey(id: string) {
@@ -60,17 +62,17 @@ export default function Settings() {
 
   return (
     <div>
-      <PageHeader title="Settings" sub="Edge policy & WAF mode, notification providers, feature flags and API keys." />
+      <PageHeader title={t('settings.title')} sub={t('settings.sub')} />
       {msg && <div role="status" className="mb-4 rounded-lg bg-success border border-brand-200 px-4 py-2.5 text-sm text-success-on">{msg}</div>}
 
       <div className="grid lg:grid-cols-2 gap-6">
         <section className="card p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-stone-900">Edge policy — route table (APISIX)</h2>
+            <h2 className="text-sm font-semibold text-stone-900">{t('settings.edgeTitle')}</h2>
             <DevSeedTag source={routeSource} />
           </div>
           <table className="w-full mb-5">
-            <thead><tr><th scope="col" className="th">Plane</th><th scope="col" className="th">Path</th><th scope="col" className="th">Upstream</th><th scope="col" className="th">Auth</th></tr></thead>
+            <thead><tr><th scope="col" className="th">{t('settings.edgeTh.plane')}</th><th scope="col" className="th">{t('settings.edgeTh.path')}</th><th scope="col" className="th">{t('settings.edgeTh.upstream')}</th><th scope="col" className="th">{t('settings.edgeTh.auth')}</th></tr></thead>
             <tbody>
               {routes.map((r, i) => (
                 <tr key={i}>
@@ -82,7 +84,7 @@ export default function Settings() {
               ))}
             </tbody>
           </table>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-stone-600 mb-2">WAF mode</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-stone-600 mb-2">{t('settings.wafTitle')}</h3>
           <div className="flex gap-2">
             {['detect', 'enforce'].map((m) => (
               <button key={m} onClick={() => setWAF(m)}
@@ -90,14 +92,14 @@ export default function Settings() {
                 {m}
               </button>
             ))}
-            <span className="self-center text-xs text-stone-600">current: <span className="font-mono">{waf}</span></span>
+            <span className="self-center text-xs text-stone-600">{t('settings.current')} <span className="font-mono">{waf}</span></span>
           </div>
         </section>
 
         <section className="card p-5">
-          <h2 className="text-sm font-semibold text-stone-900 mb-4">Notification providers</h2>
+          <h2 className="text-sm font-semibold text-stone-900 mb-4">{t('settings.notifTitle')}</h2>
           <table className="w-full">
-            <thead><tr><th scope="col" className="th">Channel</th><th scope="col" className="th">Provider</th><th scope="col" className="th">Mode</th><th scope="col" className="th">Status</th></tr></thead>
+            <thead><tr><th scope="col" className="th">{t('settings.notifTh.channel')}</th><th scope="col" className="th">{t('settings.notifTh.provider')}</th><th scope="col" className="th">{t('settings.notifTh.mode')}</th><th scope="col" className="th">{t('settings.notifTh.status')}</th></tr></thead>
             <tbody>
               {providers.map((p) => (
                 <tr key={p.channel}>
@@ -109,11 +111,11 @@ export default function Settings() {
               ))}
             </tbody>
           </table>
-          <p className="mt-3 text-xs text-stone-600">All providers run behind interfaces with log simulators in dev (honesty tag: no real SMS/email is sent).</p>
+          <p className="mt-3 text-xs text-stone-600">{t('settings.notifNote')}</p>
         </section>
 
         <section className="card p-5">
-          <h2 className="text-sm font-semibold text-stone-900 mb-4">Feature flags</h2>
+          <h2 className="text-sm font-semibold text-stone-900 mb-4">{t('settings.flagsTitle')}</h2>
           <div className="space-y-2.5">
             {Object.entries(flags).map(([k, v]) => (
               <div key={k} className="flex items-center justify-between">
@@ -123,7 +125,7 @@ export default function Settings() {
                   aria-checked={v}
                   onClick={() => toggleFlag(k)}
                   className={`relative h-6 w-11 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-700 focus-visible:ring-offset-2 ${v ? 'bg-brand-700' : 'bg-neutral-300'}`}
-                  aria-label={`toggle ${k}`}
+                  aria-label={t('settings.toggleLabel', { key: k })}
                 >
                   <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${v ? 'left-[22px]' : 'left-0.5'}`} />
                 </button>
@@ -133,19 +135,19 @@ export default function Settings() {
         </section>
 
         <section className="card p-5">
-          <h2 className="text-sm font-semibold text-stone-900 mb-4">API keys</h2>
+          <h2 className="text-sm font-semibold text-stone-900 mb-4">{t('settings.keysTitle')}</h2>
           <form onSubmit={createKey} className="mb-4 flex gap-2">
-            <label htmlFor="api-key-name" className="sr-only">Key name</label>
-            <input id="api-key-name" className="input" placeholder="key name e.g. ci ceremony bot" value={keyName} onChange={(e) => setKeyName(e.target.value)} required />
-            <button className="btn-primary shrink-0">Create</button>
+            <label htmlFor="api-key-name" className="sr-only">{t('settings.keyNameLabel')}</label>
+            <input id="api-key-name" className="input" placeholder={t('settings.keyPlaceholder')} value={keyName} onChange={(e) => setKeyName(e.target.value)} required />
+            <button className="btn-primary shrink-0">{t('settings.create')}</button>
           </form>
           {secretOnce && (
             <div className="mb-4 rounded-lg bg-warning border border-warning-strong px-3 py-2 text-xs font-mono text-warning-on break-all">
-              {secretOnce} — shown once, store it now.
+              {secretOnce} {t('settings.secretNote')}
             </div>
           )}
           <table className="w-full">
-            <thead><tr><th scope="col" className="th">Name</th><th scope="col" className="th">Prefix</th><th scope="col" className="th">Scopes</th><th scope="col" className="th">Created</th><th scope="col" className="th"></th></tr></thead>
+            <thead><tr><th scope="col" className="th">{t('settings.keysTh.name')}</th><th scope="col" className="th">{t('settings.keysTh.prefix')}</th><th scope="col" className="th">{t('settings.keysTh.scopes')}</th><th scope="col" className="th">{t('settings.keysTh.created')}</th><th scope="col" className="th"></th></tr></thead>
             <tbody>
               {keys.map((k) => (
                 <tr key={k.id} className={k.revoked ? 'opacity-50' : ''}>
@@ -154,8 +156,8 @@ export default function Settings() {
                   <td className="td font-mono text-xs">{k.scopes}</td>
                   <td className="td text-xs">{fmtTime(k.created_at)}</td>
                   <td className="td">
-                    {k.revoked ? <Badge tone="red">revoked</Badge> : (
-                      <button className="btn-secondary text-xs" onClick={() => revokeKey(k.id)}>Revoke</button>
+                    {k.revoked ? <Badge tone="red">{t('settings.revoked')}</Badge> : (
+                      <button className="btn-secondary text-xs" onClick={() => revokeKey(k.id)}>{t('settings.revoke')}</button>
                     )}
                   </td>
                 </tr>

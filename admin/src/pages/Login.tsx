@@ -1,10 +1,12 @@
 import { FormEvent, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { login } from '../api'
 import Field from '../components/Field'
 
 export default function Login() {
   const nav = useNavigate()
+  const { t } = useTranslation('pages')
   const [email, setEmail] = useState('admin@meridian.local')
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
@@ -29,15 +31,15 @@ export default function Login() {
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <div className="text-3xl font-semibold tracking-tight text-brand-800">Meridian</div>
-          <div className="mt-1 text-sm text-stone-600">NRS Unified Platform — Management Console</div>
+          <div className="mt-1 text-sm text-stone-600">{t('login.subtitle')}</div>
         </div>
         <form onSubmit={submit} className="card p-7 space-y-4">
-          <Field label="Email" required>
+          <Field label={t('login.email')} required>
             {(id) => (
               <input id={id} className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus autoComplete="username" />
             )}
           </Field>
-          <Field label="Password" required>
+          <Field label={t('login.password')} required>
             {(id) => (
               <input id={id} className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" autoComplete="current-password" />
             )}
@@ -52,14 +54,14 @@ export default function Login() {
             </div>
           )}
           <button className="btn-primary w-full justify-center h-11" disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign in'}
+            {busy ? t('login.signingIn') : t('login.signIn')}
           </button>
           <div className="rounded-md bg-neutral-50 border border-neutral-200 px-3 py-2 text-xs text-stone-600">
-            Dev mode — seeded admin <span className="font-mono">admin@meridian.local / admin123</span>.
+            {t('login.devNote')} <span className="font-mono">admin@meridian.local / admin123</span>.
             JWT issued by admin-api (HS256 dev secret).
           </div>
         </form>
-        <div className="mt-6 text-center text-xs text-stone-600">Sovereign tax infrastructure · two zones · audited cross-zone flows only</div>
+        <div className="mt-6 text-center text-xs text-stone-600">{t('login.footer')}</div>
       </div>
     </div>
   )
