@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Trans, useTranslation } from 'react-i18next'
 import { api, fmtTime } from '../api'
 import { Gate } from '../types'
 import { Badge, DevSeedTag, Modal, PageHeader } from '../components'
@@ -7,6 +8,7 @@ import Field from '../components/Field'
 interface GazetteRow { instrument: string; status: string; gate: string; checked_at: string }
 
 export default function Gates() {
+  const { t } = useTranslation('pages')
   const [gates, setGates] = useState<Gate[]>([])
   const [source, setSource] = useState('')
   const [gazette, setGazette] = useState<GazetteRow[]>([])
@@ -32,21 +34,21 @@ export default function Gates() {
       setReason('')
       load()
     } catch (ex: any) {
-      setErr(ex.response?.data?.detail || 'Flip failed (requires board role)')
+      setErr(ex.response?.data?.detail || t('gates.flipFailed'))
     }
   }
 
   return (
     <div>
       <PageHeader
-        title="Gates & Reg-watch"
-        sub="Regulatory gates are board-authorised switches. Flips are armed, confirmed and audited. Gazette watch tracks the instruments behind each gate."
+        title={t('gates.title')}
+        sub={t('gates.sub')}
         actions={<DevSeedTag source={source} />}
       />
       <div className="card overflow-x-auto mb-8">
         <table className="w-full">
           <thead>
-            <tr><th scope="col" className="th">Gate</th><th scope="col" className="th">Description</th><th scope="col" className="th">State</th><th scope="col" className="th">Updated</th><th scope="col" className="th"></th></tr>
+            <tr><th scope="col" className="th">{t('gates.th.gate')}</th><th scope="col" className="th">{t('gates.th.description')}</th><th scope="col" className="th">{t('gates.th.state')}</th><th scope="col" className="th">{t('gates.th.updated')}</th><th scope="col" className="th"></th></tr>
           </thead>
           <tbody>
             {gates.map((g) => (
@@ -57,13 +59,13 @@ export default function Gates() {
                 </td>
                 <td className="td text-xs max-w-md">{g.description}</td>
                 <td className="td">
-                  <Badge tone={g.state ? 'green' : 'red'}>{g.state ? 'OPEN' : 'CLOSED'}</Badge>
-                  {g.armed_by && <div className="text-xs text-stone-600 mt-1">by {g.armed_by}</div>}
+                  <Badge tone={g.state ? 'green' : 'red'}>{g.state ? t('gates.open') : t('gates.closed')}</Badge>
+                  {g.armed_by && <div className="text-xs text-stone-600 mt-1">{t('gates.armedBy', { actor: g.armed_by })}</div>}
                 </td>
                 <td className="td text-xs">{fmtTime(g.updated_at)}</td>
                 <td className="td">
                   <button className={g.state ? 'btn-danger text-xs' : 'btn-primary text-xs'} onClick={() => setTarget(g)}>
-                    {g.state ? 'Close gate' : 'Open gate'}
+                    {g.state ? t('gates.closeGate') : t('gates.openGate')}
                   </button>
                 </td>
               </tr>
@@ -73,7 +75,7 @@ export default function Gates() {
       </div>
 
       <section>
-        <h2 className="text-sm font-semibold text-stone-900 mb-3">Gazette watch</h2>
+        <h2 className="text-sm font-semibold text-stone-900 mb-3">{t('gates.gazetteWatch')}</h2>
         <div className="grid md:grid-cols-2 gap-4">
           {gazette.map((g) => (
             <div key={g.instrument} className="card p-4">
@@ -82,27 +84,31 @@ export default function Gates() {
                 <Badge tone="clay">{g.gate}</Badge>
               </div>
               <div className="mt-1.5 text-xs text-stone-600">{g.status}</div>
-              <div className="mt-2 text-xs text-stone-600">checked {fmtTime(g.checked_at)}</div>
+              <div className="mt-2 text-xs text-stone-600">{t('gates.checked', { time: fmtTime(g.checked_at) })}</div>
             </div>
           ))}
         </div>
       </section>
 
-      <Modal open={!!target} title={`Confirm gate flip — ${target?.id}`} onClose={() => setTarget(null)}>
+      <Modal open={!!target} title={t('gates.modalTitle', { id: target?.id })} onClose={() => setTarget(null)}>
         <div className="space-y-4">
           <div className="rounded-lg bg-warning border border-warning-strong px-4 py-3 text-sm text-warning-on">
-            Gate flips are board-authorised and written to the append-only audit trail.
-            You are about to {target?.state ? 'CLOSE' : 'OPEN'} <span className="font-mono font-semibold">{target?.id}</span>.
+            <Trans
+              i18nKey="gates.flipWarn"
+              ns="pages"
+              values={{ action: target?.state ? t('gates.closed') : t('gates.open'), id: target?.id }}
+              components={{ 1: <span className="font-mono font-semibold" /> }}
+            />
           </div>
-          <Field label="Reason (recorded in audit trail)" required>
+          <Field label={t('gates.reasonLabel')} required>
             {(id) => (
-              <input id={id} className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Gazette 2025-No-42 confirmed CTCs" aria-required="true" />
+              <input id={id} className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t('gates.reasonPlaceholder')} aria-required="true" />
             )}
           </Field>
           {err && <div role="alert" className="text-sm text-danger-strong">{err}</div>}
           <div className="flex justify-end gap-2">
-            <button className="btn-secondary" onClick={() => setTarget(null)}>Cancel</button>
-            <button className="btn-danger" disabled={!reason.trim()} onClick={flip}>Arm & confirm flip</button>
+            <button className="btn-secondary" onClick={() => setTarget(null)}>{t('gates.cancel')}</button>
+            <button className="btn-danger" disabled={!reason.trim()} onClick={flip}>{t('gates.armConfirm')}</button>
           </div>
         </div>
       </Modal>

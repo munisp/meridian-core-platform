@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, fmtTime } from '../api'
 import { AuditEvent, Overview, ServiceEntry } from '../types'
 import { DevSeedTag, HealthBadge, PageHeader, SkeletonRows, StatCard } from '../components'
 
 export default function Dashboard() {
+  const { t } = useTranslation('pages')
   const [ov, setOv] = useState<Overview | null>(null)
   const [services, setServices] = useState<ServiceEntry[]>([])
   const [events, setEvents] = useState<AuditEvent[]>([])
@@ -25,19 +27,19 @@ export default function Dashboard() {
 
   return (
     <div>
-      <PageHeader title="Dashboard" sub="Platform health, control-plane counts and recent audited activity across all four planes." />
+      <PageHeader title={t('dashboard.title')} sub={t('dashboard.sub')} />
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
-        <StatCard label="Services healthy" value={ov ? `${ov.services.healthy}/${ov.services.total}` : '—'} sub="registered services" />
-        <StatCard label="Rule packs" value={ov?.packs.count ?? '—'} seed={ov?.packs.source === 'dev-seed'} />
-        <StatCard label="Tenants" value={ov?.tenants.count ?? '—'} />
-        <StatCard label="Ledger transfers" value={ov?.transfers.count ?? '—'} seed={ov?.transfers.source === 'dev-seed'} />
-        <StatCard label="Evidence objects" value={ov?.evidence_objects.count ?? '—'} seed={ov?.evidence_objects.source === 'dev-seed'} />
-        <StatCard label="Gates open" value={`${gateOpen}/${gateTotal}`} sub="regulatory gates" />
+        <StatCard label={t('dashboard.servicesHealthy')} value={ov ? `${ov.services.healthy}/${ov.services.total}` : '—'} sub={t('dashboard.registeredServices')} />
+        <StatCard label={t('dashboard.rulePacks')} value={ov?.packs.count ?? '—'} seed={ov?.packs.source === 'dev-seed'} />
+        <StatCard label={t('dashboard.tenants')} value={ov?.tenants.count ?? '—'} />
+        <StatCard label={t('dashboard.ledgerTransfers')} value={ov?.transfers.count ?? '—'} seed={ov?.transfers.source === 'dev-seed'} />
+        <StatCard label={t('dashboard.evidenceObjects')} value={ov?.evidence_objects.count ?? '—'} seed={ov?.evidence_objects.source === 'dev-seed'} />
+        <StatCard label={t('dashboard.gatesOpen')} value={`${gateOpen}/${gateTotal}`} sub={t('dashboard.regulatoryGates')} />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
         <section className="card p-5">
-          <h2 className="text-sm font-semibold text-stone-900 mb-4">Service health rollup</h2>
+          <h2 className="text-sm font-semibold text-stone-900 mb-4">{t('dashboard.serviceRollup')}</h2>
           <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
             {services.filter((s) => s.kind === 'service').map((s) => (
               <div key={s.id} className="flex items-center justify-between gap-3 text-sm">
@@ -54,16 +56,16 @@ export default function Dashboard() {
               </div>
             ))}
             {!svcLoaded && <SkeletonRows rows={6} height="h-6" />}
-            {svcLoaded && services.length === 0 && <div className="text-sm text-stone-600">No services registered.</div>}
+            {svcLoaded && services.length === 0 && <div className="text-sm text-stone-600">{t('dashboard.noServices')}</div>}
           </div>
           <p className="mt-3 text-xs text-stone-600">
-            Unreachable = service not started in this dev environment; dependent views fall back to marked dev seeds.
+            {t('dashboard.unreachableNote')}
           </p>
         </section>
 
         <section className="card p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-stone-900">Recent audit events</h2>
+            <h2 className="text-sm font-semibold text-stone-900">{t('dashboard.recentEvents')}</h2>
             <DevSeedTag source={auditSource} />
           </div>
           <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
@@ -78,7 +80,7 @@ export default function Dashboard() {
               </div>
             ))}
             {!evLoaded && <SkeletonRows rows={5} height="h-10" />}
-            {evLoaded && events.length === 0 && <div className="text-sm text-stone-600">No audit events yet.</div>}
+            {evLoaded && events.length === 0 && <div className="text-sm text-stone-600">{t('dashboard.noEvents')}</div>}
           </div>
         </section>
       </div>

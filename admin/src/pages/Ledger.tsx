@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, fmtKobo, fmtTime } from '../api'
 import { LedgerAccount, ReconBreak } from '../types'
 import { Badge, DevSeedTag, Modal, PageHeader } from '../components'
@@ -11,6 +12,7 @@ const LEDGER_NAMES: Record<number, string> = {
 }
 
 export default function Ledger() {
+  const { t } = useTranslation('pages')
   const [accounts, setAccounts] = useState<LedgerAccount[]>([])
   const [source, setSource] = useState('')
   const [breaks, setBreaks] = useState<ReconBreak[]>([])
@@ -36,7 +38,7 @@ export default function Ledger() {
       const { data } = await api.get(`/v1/admin/ledger/accounts/${encodeURIComponent(lookup)}/balance`)
       setLookupResult(`${data.account_id}: ${fmtKobo(data.balance_kobo)} ${data.currency} (${data.source})`)
     } catch {
-      setLookupResult('Account not found.')
+      setLookupResult(t('ledger.accountNotFound'))
     }
   }
 
@@ -50,39 +52,39 @@ export default function Ledger() {
         amount_kobo: amountKobo,
         ledger: Number(form.ledger),
       })
-      setMsg(`Pending transfer ${data.id} created — post or void it from the ledger svc (code 1=authorise).`)
+      setMsg(t('ledger.pendingCreated', { id: data.id }))
       setShowTransfer(false)
       load()
     } catch (ex: any) {
-      setMsg(ex.response?.data?.detail || 'Transfer failed')
+      setMsg(ex.response?.data?.detail || t('ledger.transferFailed'))
     }
   }
 
   return (
     <div>
       <PageHeader
-        title="Ledger"
-        sub="TigerBeetle double-entry scheme (integer kobo only). Accounts browser, balance lookup, transfer initiation and PSSP recon breaks."
+        title={t('ledger.title')}
+        sub={t('ledger.sub')}
         actions={
           <>
             <DevSeedTag source={source} />
-            <button className="btn-primary" onClick={() => setShowTransfer(true)}>New transfer</button>
+            <button className="btn-primary" onClick={() => setShowTransfer(true)}>{t('ledger.newTransfer')}</button>
           </>
         }
       />
       {msg && <div role="status" className="mb-4 rounded-lg bg-success border border-brand-200 px-4 py-2.5 text-sm text-success-on">{msg}</div>}
 
       <form onSubmit={doLookup} className="mb-6 flex gap-2 max-w-xl">
-        <label htmlFor="acct-lookup" className="sr-only">Account id</label>
-        <input id="acct-lookup" className="input font-mono text-xs" placeholder="Account id e.g. 200|5|psm-settlement-pssp" value={lookup} onChange={(e) => setLookup(e.target.value)} />
-        <button className="btn-secondary shrink-0">Balance lookup</button>
+        <label htmlFor="acct-lookup" className="sr-only">{t('ledger.accountIdLabel')}</label>
+        <input id="acct-lookup" className="input font-mono text-xs" placeholder={t('ledger.lookupPlaceholder')} value={lookup} onChange={(e) => setLookup(e.target.value)} />
+        <button className="btn-secondary shrink-0">{t('ledger.balanceLookup')}</button>
       </form>
       {lookupResult && <div className="mb-6 font-mono text-sm text-stone-800">{lookupResult}</div>}
 
       <div className="card overflow-x-auto mb-8">
         <table className="w-full">
           <thead>
-            <tr><th scope="col" className="th">Account</th><th scope="col" className="th">Ledger</th><th scope="col" className="th">Owner</th><th scope="col" className="th">Flags</th><th className="th text-right">Balance</th></tr>
+            <tr><th scope="col" className="th">{t('ledger.th.account')}</th><th scope="col" className="th">{t('ledger.th.ledger')}</th><th scope="col" className="th">{t('ledger.th.owner')}</th><th scope="col" className="th">{t('ledger.th.flags')}</th><th className="th text-right">{t('ledger.th.balance')}</th></tr>
           </thead>
           <tbody>
             {accounts.map((a) => (
@@ -99,11 +101,11 @@ export default function Ledger() {
       </div>
 
       <section>
-        <h2 className="text-sm font-semibold text-stone-900 mb-3">Recon breaks (PSSP 3-way)</h2>
+        <h2 className="text-sm font-semibold text-stone-900 mb-3">{t('ledger.reconTitle')}</h2>
         <div className="card overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr><th scope="col" className="th">Break</th><th scope="col" className="th">Kind</th><th className="th text-right">Expected</th><th className="th text-right">Actual</th><th scope="col" className="th">Detail</th><th scope="col" className="th">Status</th></tr>
+              <tr><th scope="col" className="th">{t('ledger.reconTh.break')}</th><th scope="col" className="th">{t('ledger.reconTh.kind')}</th><th className="th text-right">{t('ledger.reconTh.expected')}</th><th className="th text-right">{t('ledger.reconTh.actual')}</th><th scope="col" className="th">{t('ledger.reconTh.detail')}</th><th scope="col" className="th">{t('ledger.reconTh.status')}</th></tr>
             </thead>
             <tbody>
               {breaks.map((b) => (
@@ -116,31 +118,31 @@ export default function Ledger() {
                   <td className="td"><Badge tone={b.status === 'open' ? 'red' : 'green'}>{b.status}</Badge></td>
                 </tr>
               ))}
-              {breaks.length === 0 && <tr><td className="td text-center text-stone-600" colSpan={6}>No recon breaks.</td></tr>}
+              {breaks.length === 0 && <tr><td className="td text-center text-stone-600" colSpan={6}>{t('ledger.noBreaks')}</td></tr>}
             </tbody>
           </table>
         </div>
       </section>
 
-      <Modal open={showTransfer} title="Initiate transfer (pending / two-phase)" onClose={() => setShowTransfer(false)}>
+      <Modal open={showTransfer} title={t('ledger.modalTitle')} onClose={() => setShowTransfer(false)}>
         <form onSubmit={submitTransfer} className="space-y-4">
-          <Field label="Debit account" required>
+          <Field label={t('ledger.debitAccount')} required>
             {(id) => (
               <input id={id} className="input font-mono text-xs" required value={form.debit_account_id} onChange={(e) => setForm({ ...form, debit_account_id: e.target.value })} placeholder="100|4|op-float-lagos-01" />
             )}
           </Field>
-          <Field label="Credit account" required>
+          <Field label={t('ledger.creditAccount')} required>
             {(id) => (
               <input id={id} className="input font-mono text-xs" required value={form.credit_account_id} onChange={(e) => setForm({ ...form, credit_account_id: e.target.value })} placeholder="200|5|psm-settlement-pssp" />
             )}
           </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Amount (₦)" required>
+            <Field label={t('ledger.amount')} required>
               {(id, describedBy, invalid) => (
                 <MoneyInput id={id} valueKobo={amountKobo} onChangeKobo={setAmountKobo} invalid={invalid} aria-describedby={describedBy} aria-required={true} />
               )}
             </Field>
-            <Field label="Ledger">
+            <Field label={t('ledger.ledgerLabel')}>
               {(id) => (
                 <select id={id} className="input" value={form.ledger} onChange={(e) => setForm({ ...form, ledger: Number(e.target.value) })}>
                   {Object.entries(LEDGER_NAMES).map(([k, v]) => <option key={k} value={k}>{k} · {v}</option>)}
@@ -148,10 +150,10 @@ export default function Ledger() {
               )}
             </Field>
           </div>
-          <p className="text-xs text-stone-600">Creates a pending (authorise) transfer. Post or void via the ledger service; float accounts enforce DEBITS_MUST_NOT_EXCEED_CREDITS.</p>
+          <p className="text-xs text-stone-600">{t('ledger.transferNote')}</p>
           <div className="flex justify-end gap-2">
-            <button type="button" className="btn-secondary" onClick={() => setShowTransfer(false)}>Cancel</button>
-            <button className="btn-primary" disabled={amountKobo == null || amountKobo <= 0}>Create pending transfer</button>
+            <button type="button" className="btn-secondary" onClick={() => setShowTransfer(false)}>{t('ledger.cancel')}</button>
+            <button className="btn-primary" disabled={amountKobo == null || amountKobo <= 0}>{t('ledger.createPending')}</button>
           </div>
         </form>
       </Modal>

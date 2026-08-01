@@ -1,17 +1,13 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import { ServiceEntry } from '../types'
 import { Badge, HealthBadge, PageHeader } from '../components'
 
 const PLANES = ['core', 'compliance', 'inclusion', 'gov'] as const
-const PLANE_LABEL: Record<string, string> = {
-  core: 'Core platform',
-  compliance: 'Compliance suite (Market Zone)',
-  inclusion: 'Inclusion suite (Market Zone)',
-  gov: 'Gov enclave (Sovereign Zone)',
-}
 
 export default function Applications() {
+  const { t } = useTranslation('pages')
   const [services, setServices] = useState<ServiceEntry[]>([])
   const [busy, setBusy] = useState('')
 
@@ -33,16 +29,16 @@ export default function Applications() {
   return (
     <div>
       <PageHeader
-        title="Applications"
-        sub="Service registry: all 15 core services plus plane applications. Enable/disable controls health polling and route eligibility."
-        actions={<button className="btn-secondary" onClick={load}>Refresh health</button>}
+        title={t('applications.title')}
+        sub={t('applications.sub')}
+        actions={<button className="btn-secondary" onClick={load}>{t('applications.refreshHealth')}</button>}
       />
       {PLANES.map((plane) => {
         const rows = services.filter((s) => s.plane === plane)
         if (rows.length === 0) return null
         return (
           <section key={plane} className="mb-8">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-stone-600 mb-3">{PLANE_LABEL[plane]}</h2>
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-stone-600 mb-3">{t(`applications.plane.${plane}`)}</h2>
             <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
               {rows.map((s) => (
                 <div key={s.id} className="card p-5 flex flex-col">
@@ -67,7 +63,7 @@ export default function Applications() {
                       disabled={busy === s.id || s.id === 'admin-api'}
                       onClick={() => toggle(s.id)}
                     >
-                      {s.enabled ? 'Disable' : 'Enable'}
+                      {s.enabled ? t('applications.disable') : t('applications.enable')}
                     </button>
                   </div>
                 </div>
