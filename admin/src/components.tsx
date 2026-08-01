@@ -1,9 +1,9 @@
 import { ReactNode, useEffect, useState } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   LayoutDashboard, AppWindow, BookMarked, Flag, Wallet, RefreshCcw,
-  ShieldCheck, Users, ArrowLeftRight, Settings as SettingsIcon, LogOut, LucideIcon,
+  ShieldCheck, Users, ArrowLeftRight, Settings as SettingsIcon, LogOut, Menu, X, LucideIcon,
 } from 'lucide-react'
 import { clearSession, getUser } from './api'
 import LangSwitcher from './components/LangSwitcher'
@@ -158,7 +158,7 @@ export function Layout({ children }: { children: ReactNode }) {
       >
         {t('a11y.skipToContent')}
       </a>
-      <aside className="w-60 shrink-0 bg-brand-800 text-white flex flex-col">
+      <aside className="hidden md:flex w-60 shrink-0 bg-brand-800 text-white flex-col">
         <div className="px-5 py-5 border-b border-brand-700">
           <div className="text-lg font-semibold tracking-tight">{t('app.title')}</div>
           <div className="text-xs text-brand-100 mt-0.5">{t('app.subtitle')}</div>
@@ -196,7 +196,99 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         </div>
       </aside>
-      <main id="content" className="flex-1 min-w-0 px-8 py-7 max-w-[1400px]">{children}</main>
+      <main id="content" className="flex-1 min-w-0 px-4 pb-24 pt-5 md:px-8 md:pb-7 md:py-7 max-w-[1400px]">{children}</main>
+      <MobileBottomNav />
     </div>
+  )
+}
+
+const MOBILE_TABS: { to: string; key: string; icon: LucideIcon }[] = [
+  { to: '/', key: 'dashboard', icon: LayoutDashboard },
+  { to: '/tenants', key: 'tenants', icon: Users },
+  { to: '/rule-packs', key: 'rulePacks', icon: BookMarked },
+  { to: '/audit', key: 'audit', icon: ShieldCheck },
+]
+const MORE_PATHS = NAV.filter((n) => !MOBILE_TABS.some((m) => m.to === n.to))
+
+/** Mobile bottom-nav fallback (<768px): 4 tabs + More → drawer (spec §10). */
+function MobileBottomNav() {
+  const { t } = useTranslation(['common', 'pages'])
+  const [open, setOpen] = useState(false)
+  const { pathname } = useLocation()
+  useEffect(() => { setOpen(false) }, [pathname])
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open])
+  const moreActive = MORE_PATHS.some((n) => (n.to === '/' ? pathname === '/' : pathname.startsWith(n.to)))
+  const tabCls = (isActive: boolean) =>
+    `flex min-h-[44px] flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-700 ${
+      isActive ? 'text-brand-700' : 'text-stone-600 hover:text-stone-900'
+    }`
+  return (
+    <>
+      {open && (
+        <div className="fixed inset-0 z-40 bg-stone-900/40 md:hidden" onClick={() => setOpen(false)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('pages:bottomNav.moreTitle')}
+            className="absolute inset-x-0 bottom-0 rounded-t-2xl bg-white p-4 pb-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-stone-900">{t('pages:bottomNav.moreTitle')}</h2>
+              <button
+                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-stone-600 hover:text-stone-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-700"
+                onClick={() => setOpen(false)}
+                aria-label={t('actions.close')}
+              >
+                <X aria-hidden="true" className="h-5 w-5" />
+              </button>
+            </div>
+            <nav aria-label={t('pages:bottomNav.moreTitle')} className="grid grid-cols-2 gap-1">
+              {MORE_PATHS.map((n) => (
+                <NavLink
+                  key={n.to}
+                  to={n.to}
+                  end={n.to === '/'}
+                  className={({ isActive }) =>
+                    `flex min-h-[44px] items-center gap-2.5 rounded-md px-3 py-2.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-700 ${
+                      isActive ? 'bg-brand-100 text-brand-800 font-semibold' : 'text-stone-700 hover:bg-neutral-100'
+                    }`
+                  }
+                >
+                  <n.icon aria-hidden="true" className="h-4 w-4 shrink-0" />
+                  {t(`nav.${n.key}`)}
+                </NavLink>
+              ))}
+            </nav>
+          </div>
+        </div>
+      )}
+      <nav
+        aria-label={t('pages:bottomNav.label')}
+        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-neutral-200 bg-white pb-[env(safe-area-inset-bottom)] md:hidden"
+      >
+        {MOBILE_TABS.map((n) => (
+          <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => tabCls(isActive)}>
+            <n.icon aria-hidden="true" className="h-5 w-5" />
+            <span className="max-w-full truncate px-0.5">{t(`nav.${n.key}`)}</span>
+          </NavLink>
+        ))}
+        <button
+          type="button"
+          className={tabCls(moreActive)}
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-current={moreActive ? 'page' : undefined}
+        >
+          <Menu aria-hidden="true" className="h-5 w-5" />
+          <span className="max-w-full truncate px-0.5">{t('pages:bottomNav.more')}</span>
+        </button>
+      </nav>
+    </>
   )
 }
