@@ -6,6 +6,7 @@ import {
   ShieldCheck, Users, ArrowLeftRight, Settings as SettingsIcon, LogOut, Menu, X, LucideIcon,
 } from 'lucide-react'
 import { clearSession, getUser } from './api'
+import { isDemoMode } from './api/demo'
 import LangSwitcher from './components/LangSwitcher'
 
 export function PageHeader({ title, sub, actions }: { title: string; sub?: string; actions?: ReactNode }) {
@@ -181,7 +182,15 @@ export function Layout({ children }: { children: ReactNode }) {
           ))}
         </nav>
         <div className="border-t border-brand-700 px-4 py-3 space-y-2">
-          <StatusPill />
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StatusPill />
+            {isDemoMode() && (
+              <span className="badge bg-warning text-warning-on" title="Demo mode: seeded in-memory data, no live backend">
+                <span aria-hidden="true">◌</span>
+                DEMO DATA — no live backend
+              </span>
+            )}
+          </div>
           <div className="text-sm font-medium truncate">{user?.name || t('user.fallback')}</div>
           <div className="text-xs text-brand-100 truncate">{user?.email}</div>
           <div className="flex items-center justify-between gap-2 pt-1">
