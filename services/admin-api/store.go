@@ -69,7 +69,7 @@ func seedTenantsUsers(s *Store) {
 	s.Users["admin@meridian.local"] = &User{ID: "u-admin", Email: "admin@meridian.local", Name: "Platform Administrator", Roles: []string{"admin", "board"}, TenantID: "t-nrs-sovereign", Status: "active", CreatedAt: "2025-01-05T09:00:00Z", PasswordHash: MustHashPassword("admin123")}
 	s.Users["operator@meridian.local"] = &User{ID: "u-operator", Email: "operator@meridian.local", Name: "Console Operator", Roles: []string{"operator"}, TenantID: "t-nrs-sovereign", Status: "active", CreatedAt: "2025-01-06T09:00:00Z", PasswordHash: MustHashPassword("operator123")}
 	s.Users["auditor@meridian.local"] = &User{ID: "u-auditor", Email: "auditor@meridian.local", Name: "Independent Auditor", Roles: []string{"auditor"}, TenantID: "t-nrs-sovereign", Status: "active", CreatedAt: "2025-01-06T09:30:00Z", PasswordHash: MustHashPassword("auditor123")}
-	s.Users["amina@chambers.ng"] = &User{ID: "u-amina", Email: "amina@chambers.ng", Name: "Amina Bello (Practitioner)", Roles: []string{"operator"}, TenantID: "t-acme-bank", Status: "active", CreatedAt: "2025-04-20T10:00:00Z", PasswordHash: MustHashPassword("changeme123")}
+	s.Users["amina@chambers.ng"] = &User{ID: "u-amina", Email: "amina@chambers.ng", Name: "Amina Bello (Practitioner)", Roles: []string{"operator"}, TenantID: "t-acme-bank", Status: "active", CreatedAt: "2025-04-20T10:00:00Z", PasswordHash: MustHashPassword(seedPersonaPassword("amina@chambers.ng"))}
 
 	s.Relations = []Relation{
 		{Object: "matter:lagos-v-abc-holdings", Relation: "counsel", Subject: "user:amina@chambers.ng", Plane: "compliance"},
@@ -164,12 +164,12 @@ func seedSettings(s *Store) {
 		{Channel: "push", Provider: "fcm-class adapter", Mode: "simulator", Status: "ok"},
 	}
 	s.Routes = []RouteRow{
-		{Plane: "compliance", Path: "/einvoicing/*", Upstream: "einvoicing:8101", Methods: "GET,POST", Auth: "jwt"},
-		{Plane: "compliance", Path: "/wht/*", Upstream: "wht:8103", Methods: "GET,POST", Auth: "jwt"},
-		{Plane: "compliance", Path: "/pos/*", Upstream: "pos-vat:8105", Methods: "GET,POST", Auth: "jwt"},
-		{Plane: "inclusion", Path: "/onboarding/*", Upstream: "onboarding:8201", Methods: "GET,POST", Auth: "jwt"},
-		{Plane: "inclusion", Path: "/psm/*", Upstream: "presumptive:8202", Methods: "GET,POST", Auth: "jwt"},
-		{Plane: "gov", Path: "/enclave/*", Upstream: "enclave-gateway:8304", Methods: "POST", Auth: "mtls+jwt"},
-		{Plane: "core", Path: "/packs/*", Upstream: "rp-registry:8081", Methods: "GET,POST", Auth: "jwt"},
+		{Plane: "compliance", Path: "/einvoicing/*", Upstream: "einvoicing:8110", Methods: "GET,POST", Auth: "jwt"},
+		{Plane: "compliance", Path: "/wht/*", Upstream: "wht:8130", Methods: "GET,POST", Auth: "jwt"},
+		{Plane: "compliance", Path: "/pos/*", Upstream: "pos-vat:8106", Methods: "GET,POST", Auth: "jwt"},
+		{Plane: "inclusion", Path: "/onboarding/*", Upstream: "onboarding:8101", Methods: "GET,POST", Auth: "jwt"},
+		{Plane: "inclusion", Path: "/psm/*", Upstream: "presumptive:8102", Methods: "GET,POST", Auth: "jwt"},
+		{Plane: "gov", Path: "/enclave/*", Upstream: "enclave-gateway:8400", Methods: "POST", Auth: "mtls+jwt"},
+		{Plane: "core", Path: "/packs/*", Upstream: "rp-registry:8002", Methods: "GET,POST", Auth: "jwt"},
 	}
 }

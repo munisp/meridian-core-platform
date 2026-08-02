@@ -2,11 +2,14 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -57,6 +60,32 @@ func newID(prefix string) string {
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
+
+// ---------- passwords ----------
+
+// generatePassword returns a cryptographically random password (24 chars,
+// base64url). Used instead of any shared/default credential.
+func generatePassword() string {
+	b := make([]byte, 18)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// seedPersonaPassword resolves the dev seed persona's password:
+// ADMIN_SEED_PASSWORD env wins; otherwise a random one is generated.
+// In dev it is logged exactly once (at boot) so the persona remains
+// loggable; in prod (AUTH_MODE != dev) it is generated and never logged,
+// leaving the persona effectively disabled for password login.
+func seedPersonaPassword(email string) string {
+	if v := os.Getenv("ADMIN_SEED_PASSWORD"); v != "" {
+		return v
+	}
+	pw := generatePassword()
+	if envOr("AUTH_MODE", "dev") == "dev" {
+		log.Printf("component=admin-api dev-only: generated seed password for %s: %s", email, pw)
+	}
+	return pw
+}
 
 // ---------- downstream fetch with graceful degradation ----------
 
