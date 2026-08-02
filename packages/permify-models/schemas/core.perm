@@ -6,9 +6,11 @@ entity tenant {
     relation admin @user
     relation operator @user
     relation auditor @user
+    relation board @user
     permission manage = admin
     permission operate = admin + operator
     permission read = admin + operator + auditor
+    permission govern = admin + board
 }
 
 entity service_account {
