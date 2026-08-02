@@ -229,8 +229,15 @@ class RefundExecutor:
                 amount_kobo: int, decision: dict, approved_by: str) -> dict:
         rid = refund_id(tin_hash, period, tax_type)
         existing = self.store.get("refund_executions", rid)
-        if existing is not None and existing.get("status") in ("posted", "pending", "post_failed"):
+        if existing is not None and existing.get("status") in ("posted", "pending"):
             return {**existing, "idempotent_replay": True}
+        # post_failed: the compensation voided the original pending, so a
+        # retry must use a fresh deterministic attempt id (create_pending
+        # dedups on the transfer id and a voided id cannot be re-posted).
+        # "failed" (pending never created) retries under the original ids.
+        attempt = 0
+        if existing is not None and existing.get("status") == "post_failed":
+            attempt = int(existing.get("attempt", 0)) + 1
         tre, tax = self._accounts(tin_hash)
         # fund the refund treasury from the budget-offset account for this
         # refund (idempotent per refund id; the treasury enforces
@@ -239,11 +246,13 @@ class RefundExecutor:
         self.ledger.ensure_account(offset, 1, 0, "nrs-refund-budget-offset")
         if isinstance(self.ledger, InprocLedger):
             self.ledger_transfer(offset, tre, amount_kobo, "ref-fund:" + rid)
-        pend_id = deterministic_id("ref-pend:" + rid)
-        post_id = deterministic_id("ref-post:" + rid)
+        pend_id = deterministic_id("ref-pend:" + rid) if attempt == 0 \
+            else deterministic_id(f"ref-pend:{rid}:{attempt}")
+        post_id = deterministic_id("ref-post:" + rid) if attempt == 0 \
+            else deterministic_id(f"ref-post:{rid}:{attempt}")
         exe = {
             "refund_id": rid, "tin_hash": tin_hash, "period": period, "tax_type": tax_type,
-            "amount_kobo": amount_kobo, "lane": decision.get("lane"),
+            "amount_kobo": amount_kobo, "lane": decision.get("lane"), "attempt": attempt,
             "treasury_account": tre, "taxpayer_account": tax,
             "pending_transfer_id": pend_id, "post_transfer_id": post_id,
             "status": "pending", "approved_by": approved_by,

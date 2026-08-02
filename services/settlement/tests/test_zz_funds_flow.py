@@ -195,3 +195,88 @@ def test_pull_mode_recon_auto_heal_and_revenue_dedup():
         # second auto-heal run dedupes the case
         cases = [k for k in _store.list("investigation_cases") if k["reference"] == "P2"]
         assert len(cases) == 1
+
+
+# --- funds-flow #3: fasttrack replay re-executes unposted refunds ---
+
+def test_replay_after_failed_execution_reexecutes():
+    """First fasttrack call 502s mid-execution (post fails, compensation
+    voids). A double-submit must RE-EXECUTE the refund — not replay a
+    decision that never moved money — and must not double-post."""
+    _clear_open_breaks()
+    led: InprocLedger = _executor.ledger
+    orig = led.post_pending_as
+
+    def boom(pid, post_id, amount):
+        raise ValueError("simulated ledger outage")
+
+    with TestClient(app) as c:
+        led.post_pending_as = boom
+        try:
+            r1 = c.post("/v1/refunds/fasttrack", headers=H,
+                        json=_auto_approvable(tin="tin-rexec"))
+            assert r1.status_code == 502, r1.text
+        finally:
+            led.post_pending_as = orig
+        rid = refund_id("tin-rexec", "2026-07", "vat")
+        exe0 = _store.get("refund_executions", rid)
+        assert exe0["status"] == "post_failed"
+
+        # double-submit: replay path detects the unposted refund and retries
+        r2 = c.post("/v1/refunds/fasttrack", headers=H,
+                    json=_auto_approvable(tin="tin-rexec"))
+        assert r2.status_code == 200, r2.text
+        doc = r2.json()
+        assert doc.get("idempotent_replay") is True
+        exe = doc["execution"]
+        assert exe["status"] == "posted"
+        assert exe["attempt"] == 1  # fresh attempt ids (original was voided)
+
+        # exactly one posted refund to the taxpayer (no double-post)
+        from app.refund_execution import taxpayer_account
+        tax = taxpayer_account("tin-rexec")
+        assert led.accounts[tax]["credits_posted"] == 300_000_000
+
+
+def test_replay_unposted_decision_reexecutes():
+    """Crash between storing the decision and executing: the replay path
+    must execute the stranded auto_approve decision."""
+    _clear_open_breaks()
+    from app.refund import decide_refund_lane
+    rid = refund_id("tin-strand", "2026-07", "vat")
+    doc = decide_refund_lane(tin_hash="tin-strand", amount_kobo=300_000_000,
+                             credit_score=800, filings_on_time=12, filings_total=12,
+                             prior_breaks=0, tax_type="vat")
+    doc.update({"refund_id": rid, "period": "2026-07",
+                "tin_hash": "tin-strand", "tax_type": "vat"})
+    _store.put("refund_decisions", rid, doc)
+    assert _store.get("refund_executions", rid) is None  # stranded
+
+    with TestClient(app) as c:
+        r = c.post("/v1/refunds/fasttrack", headers=H,
+                   json=_auto_approvable(tin="tin-strand"))
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert out.get("idempotent_replay") is True
+        assert out["execution"]["status"] == "posted"
+        from app.refund_execution import taxpayer_account
+        led: InprocLedger = _executor.ledger
+        assert led.accounts[taxpayer_account("tin-strand")]["credits_posted"] == 300_000_000
+
+
+def test_replay_posted_decision_does_not_reexecute():
+    """A decision whose refund POSTED replays without touching the ledger."""
+    _clear_open_breaks()
+    with TestClient(app) as c:
+        r1 = c.post("/v1/refunds/fasttrack", headers=H,
+                    json=_auto_approvable(tin="tin-nore"))
+        assert r1.status_code == 200, r1.text
+        rid = refund_id("tin-nore", "2026-07", "vat")
+        from app.refund_execution import taxpayer_account
+        led: InprocLedger = _executor.ledger
+        before = led.accounts[taxpayer_account("tin-nore")]["credits_posted"]
+        r2 = c.post("/v1/refunds/fasttrack", headers=H,
+                    json=_auto_approvable(tin="tin-nore"))
+        assert r2.status_code == 200 and r2.json()["execution"]["status"] == "posted"
+        after = led.accounts[taxpayer_account("tin-nore")]["credits_posted"]
+        assert before == after  # no second transfer

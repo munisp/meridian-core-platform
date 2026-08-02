@@ -291,6 +291,22 @@ def refund_fasttrack(req: FastTrackRequest,
     rid = refund_id(req.tin_hash, period, req.tax_type)
     prior = _store.get("refund_decisions", rid)
     if prior is not None:
+        # funds-flow #3: a stored decision is only a safe replay if the
+        # refund was actually POSTED. If the first call 502'd before/during
+        # execution (or the post failed), re-enter the idempotent executor
+        # instead of replaying a decision that never moved money.
+        if prior.get("lane") == "auto_approve":
+            exe = _store.get("refund_executions", rid) or prior.get("execution")
+            if not exe or exe.get("status") != "posted":
+                try:
+                    exe = _executor.execute(tin_hash=prior["tin_hash"], period=prior["period"],
+                                            tax_type=prior.get("tax_type"),
+                                            amount_kobo=prior["amount_kobo"],
+                                            decision=prior, approved_by="fasttrack:auto")
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(502, f"refund execution failed: {exc}") from exc
+                prior["execution"] = exe
+                _store.put("refund_decisions", rid, prior)
         return {**prior, "idempotent_replay": True}
     server_breaks = sum(1 for b in _store.list("breaks") if b.get("status") == "open")
     try:
