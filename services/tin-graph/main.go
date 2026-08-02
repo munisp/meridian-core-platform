@@ -281,6 +281,10 @@ func (s *server) verifyTIN(w http.ResponseWriter, r *http.Request) {
 		httpx.BadRequest(w, "tin required")
 		return
 	}
+	if !graph.ValidateTIN(req.TIN) {
+		httpx.BadRequest(w, "invalid TIN format (want NNNNNNNN-NNNN)")
+		return
+	}
 	hash := graph.HashTIN(req.TIN)
 	// C1: consent gate — verification requires lawful_basis + valid consent.
 	if !s.gateVerification(w, r, hash, "tin_verification", req.LawfulBasis) {
