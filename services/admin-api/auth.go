@@ -142,7 +142,14 @@ func hasRole(c *claims, role string) bool {
 // requireRole wraps a handler func requiring a role (admin/board/operator/auditor).
 func (a *app) requireRole(role string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !hasRole(getClaims(r), role) {
+		allowed, err := a.authorizeRole(r, role)
+		if err != nil {
+			// authz backend unreachable: fail closed
+			writeProblem(w, http.StatusServiceUnavailable, "authorization unavailable",
+				"Permify check failed; request denied (fail-closed)")
+			return
+		}
+		if !allowed {
 			writeProblem(w, http.StatusForbidden, "forbidden", "requires role "+role)
 			return
 		}

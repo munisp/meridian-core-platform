@@ -127,6 +127,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// P0: Permify centralized authz for provisioning/taxpayer360 scoping —
+	// fail-closed in prod without PERMIFY_URL (permify_gate.go).
+	pc, err := permifyFromEnv(os.Getenv("PROFILE"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	permChecker = pc
 	s := &server{st: st, cfg: loadMatchConfig(), nin: nin, cac: cac, consent: gate}
 
 	mux := s.routes()
@@ -184,15 +191,6 @@ type provisionReq struct {
 	Attrs      map[string]string `json:"attrs,omitempty"`
 	// Company carries the full KYB profile (O7) for CAC-track provision.
 	Company *graph.CompanyProfile `json:"company,omitempty"`
-}
-
-// canAdministerTIN reports whether the caller may provision identities or
-// read arbitrary taxpayer records (audit M-3): requires the nrs:officer or
-// admin role. Regular taxpayers may only read their OWN record (enforced
-// per-request in taxpayer360Handler).
-func canAdministerTIN(r *http.Request) bool {
-	claims, ok := auth.FromContext(r.Context())
-	return ok && (claims.HasRole("nrs:officer") || claims.HasRole("admin"))
 }
 
 func (s *server) provision(w http.ResponseWriter, r *http.Request) {

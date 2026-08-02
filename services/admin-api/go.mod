@@ -1,8 +1,13 @@
 module meridian/core-platform/services/admin-api
 
-go 1.22
+go 1.23
 
-require github.com/jackc/pgx/v5 v5.5.5
+require (
+	github.com/jackc/pgx/v5 v5.5.5
+	github.com/munisp/meridian-core-platform/packages/permify-models v0.0.0
+)
+
+replace github.com/munisp/meridian-core-platform/packages/permify-models => ../../packages/permify-models
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

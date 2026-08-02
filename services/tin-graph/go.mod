@@ -2,7 +2,10 @@ module github.com/munisp/meridian-core-platform/services/tin-graph
 
 go 1.25.0
 
-require github.com/munisp/meridian-core-platform/packages/events v0.0.0
+require (
+	github.com/munisp/meridian-core-platform/packages/events v0.0.0
+	github.com/munisp/meridian-core-platform/packages/permify-models v0.0.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -17,5 +20,7 @@ require (
 )
 
 replace github.com/munisp/meridian-core-platform/packages/events => ../../packages/events
+
+replace github.com/munisp/meridian-core-platform/packages/permify-models => ../../packages/permify-models
 
 replace github.com/munisp/meridian-core-platform/packages/rulepack-schema => ../../packages/rulepack-schema
