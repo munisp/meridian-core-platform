@@ -79,6 +79,18 @@ var (
 	rcRe  = regexp.MustCompile(`^(RC|BN)?\d{5,8}$`)
 )
 
+// TINRe is the canonical Nigerian TIN format used platform-wide:
+// 8 digits, dash, 4 digits (NNNNNNNN-NNNN) — the same format ProvisionTIN
+// mints and mig.go's `^\d{8}-\d{4}$` enforces. The schema audit found four
+// divergent TIN definitions across services (mig, kyc, hermes, tin-graph
+// having none); tin-graph aligns on this one.
+var TINRe = regexp.MustCompile(`^\d{8}-\d{4}$`)
+
+// ValidateTIN reports whether tin matches the canonical TIN format.
+func ValidateTIN(tin string) bool {
+	return TINRe.MatchString(strings.TrimSpace(tin))
+}
+
 // ProvisionTIN deterministically fuses NIN=TIN / CAC-RC=TIN (dev issuance:
 // real issuance is an NRS adapter; the fusion rule is the real logic).
 func ProvisionTIN(nin, cacRC string) (string, error) {

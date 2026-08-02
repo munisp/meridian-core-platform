@@ -70,6 +70,10 @@ func (s *server) mergeTINs(w http.ResponseWriter, r *http.Request) {
 		httpx.BadRequest(w, "surviving_tin and merged_tin required")
 		return
 	}
+	if !graph.ValidateTIN(req.SurvivingTIN) || !graph.ValidateTIN(req.MergedTIN) {
+		httpx.BadRequest(w, "invalid TIN format (want NNNNNNNN-NNNN)")
+		return
+	}
 	mr, err := graph.MergeTINs(s.st, graph.HashTIN(req.SurvivingTIN), graph.HashTIN(req.MergedTIN),
 		req.Reason, req.EvidenceRef, actorOf(r), graph.NowRFC3339())
 	if err != nil {
@@ -95,6 +99,10 @@ func (s *server) unmergeTINs(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := httpx.Decode(r, &req); err != nil || req.MergedTIN == "" {
 		httpx.BadRequest(w, "merged_tin required")
+		return
+	}
+	if !graph.ValidateTIN(req.MergedTIN) {
+		httpx.BadRequest(w, "invalid TIN format (want NNNNNNNN-NNNN)")
 		return
 	}
 	mr, err := graph.UnmergeTINs(s.st, graph.HashTIN(req.MergedTIN), actorOf(r), graph.NowRFC3339(), unmergeWindow())
