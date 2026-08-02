@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	permifymodels "github.com/munisp/meridian-core-platform/packages/permify-models"
 )
 
 const version = "0.1.0"
@@ -15,7 +17,8 @@ type app struct {
 	client    *http.Client // downstream calls, short timeout
 	jwtSecret string
 	authMode  string
-	pg        *pgUsers // non-nil when DATABASE_URL is configured (A6)
+	pg        *pgUsers              // non-nil when DATABASE_URL is configured (A6)
+	perm      *permifymodels.Client // non-nil when PERMIFY_URL is configured (P0 authz)
 }
 
 func envOr(key, def string) string {
@@ -46,6 +49,12 @@ func main() {
 			log.Fatalf("component=admin-api FATAL: postgres hydrate failed (%v)", err)
 		}
 	}
+	// P0: Permify centralized authz (fail-closed in prod without PERMIFY_URL).
+	perm, err := permifyFromEnv(a.authMode)
+	if err != nil {
+		log.Fatalf("component=admin-api FATAL: %v", err)
+	}
+	a.perm = perm
 	// apply env URL overrides to the service registry
 	a.store.mu.Lock()
 	for _, svc := range a.store.Services {
