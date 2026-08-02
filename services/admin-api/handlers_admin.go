@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"net/http"
 	"sort"
 	"time"
@@ -244,7 +245,16 @@ func (a *app) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 		u.Roles = []string{"operator"}
 	}
 	if u.Password == "" {
-		u.Password = "changeme123"
+		if a.authMode != "dev" {
+			a.store.mu.Unlock()
+			writeProblem(w, http.StatusBadRequest, "password required",
+				"an explicit password is required when AUTH_MODE != dev (no default credentials)")
+			return
+		}
+		// Dev only: generate a one-off password, log it once, force reset.
+		u.Password = generatePassword()
+		u.ForcePasswordReset = true
+		log.Printf("component=admin-api dev-only: generated password for new user %s: %s (force-reset on first login)", u.Email, u.Password)
 	}
 	u.PasswordHash = MustHashPassword(u.Password)
 	u.Password = "" // never retain plaintext

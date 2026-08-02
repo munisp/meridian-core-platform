@@ -25,6 +25,9 @@ type User struct {
 	Password string `json:"-"`
 	// PasswordHash is the PBKDF2-SHA256 encoded hash (A6), never serialised.
 	PasswordHash string `json:"-"`
+	// ForcePasswordReset is set when a dev-created user got a generated
+	// one-off password; the console should force a reset on first login.
+	ForcePasswordReset bool `json:"force_password_reset,omitempty"`
 }
 
 type Relation struct {
