@@ -7,11 +7,13 @@ metadata:
   name: default-deny
   namespace: platform-auth
 spec:
+  # Real default-deny (A8): endpointSelector {} with NO ingress/egress allow
+  # entries puts every pod in this namespace into default-deny for BOTH
+  # directions. The previous `- {}` entries were allow-all in Cilium.
+  # Only the companion allow-* policies below open specific flows
+  # (kube-dns UDP/53, middleware peers, APISIX ingress) — mirrors the
+  # correct enclave lockdown pattern in enclave.yaml.
   endpointSelector: {}
-  ingress:
-    - {}
-  egress:
-    - {}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
