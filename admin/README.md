@@ -1,4 +1,4 @@
-# Meridian — Management/Admin Console
+# Meridian Management Console — Platform Operations
 
 React 18 + TypeScript + Vite + Tailwind management plane for the NRS Unified
 Platform (SPEC §2.1). Hand-rolled Tailwind components (no UI kit), low-saturation
