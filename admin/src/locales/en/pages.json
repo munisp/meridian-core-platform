@@ -199,7 +199,7 @@
     "keyCreateFailed": "Key create failed"
   },
   "login": {
-    "subtitle": "NRS Unified Platform — Management Console",
+    "subtitle": "Meridian Management Console — Platform Operations",
     "email": "Email",
     "password": "Password",
     "signIn": "Sign in",

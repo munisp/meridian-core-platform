@@ -1,5 +1,6 @@
 {
-  "name": "meridian-admin-console",
+  "name": "meridian-management-console",
+  "description": "Meridian Management Console — Platform Operations",
   "private": true,
   "version": "0.1.0",
   "type": "module",
