@@ -7,11 +7,13 @@ metadata:
   name: default-deny
   namespace: meridian-core
 spec:
+  # Real default-deny (A8): endpointSelector {} with NO ingress/egress allow
+  # entries puts every pod in this namespace into default-deny for BOTH
+  # directions. The previous `- {}` entries were allow-all in Cilium.
+  # Only the companion allow-* policies below open specific flows
+  # (kube-dns UDP/53, middleware peers, APISIX ingress) — mirrors the
+  # correct enclave lockdown pattern in enclave.yaml.
   endpointSelector: {}
-  ingress:
-    - {}
-  egress:
-    - {}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -97,6 +99,13 @@ metadata:
 spec:
   endpointSelector: {}
   ingress:
+    # Explicit gateway path: APISIX (labelled app: apisix in meridian-core)
+    # is the only entry point for north-south API traffic into services.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: meridian-core
+            app: apisix
+    # East-west: intra-namespace service-to-service calls.
     - fromEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: meridian-core
