@@ -1,0 +1,32 @@
+# Temporal cluster (app: temporal, namespace data, deployed by
+# infra/helm/templates/deployment-temporal-worker.yaml): allow egress to its
+# Postgres visibility store and DNS only. Pairs with the data default-deny
+# hardened under A8 (data.yaml). Ingress to temporal:7233 comes from
+# meridian-core workers via the existing data allow-data-ingress rule.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-temporal-egress
+  namespace: data
+spec:
+  endpointSelector:
+    matchLabels:
+      app: temporal
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - {port: "53", protocol: UDP}
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: data
+            app: postgres
+      toPorts:
+        - ports:
+            - {port: "5432", protocol: TCP}

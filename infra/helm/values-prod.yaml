@@ -146,3 +146,16 @@ keda:
       env:
         OLLAMA_NUM_PARALLEL: "4"
         OLLAMA_KEEP_ALIVE: 10m
+
+# Stateful middleware workloads (B6/D3): consumed by deployment-tigerbeetle.yaml
+# and deployment-temporal-worker.yaml. Health probes are defined in the
+# templates (TB: tcpSocket :3000 — static binary, no shell; Temporal: exec
+# tctl cluster health readiness + tcpSocket :7233 liveness).
+workloads:
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.4
+    replicas: 1
+    storage: 100Gi
+  temporalWorker:
+    image: temporalio/auto-setup:1.24.2
+    replicas: 1
