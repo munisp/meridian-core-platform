@@ -77,6 +77,61 @@ func (s *server) wafMode() string {
 	return v.Mode
 }
 
+// wafUADenylist is the scanner/bot User-Agent blocklist applied to every
+// route in enforce mode (WAF class L4). Entries are matched by APISIX
+// ua-restriction (Lua pattern semantics against the User-Agent header).
+var wafUADenylist = []string{
+	"blocked-agent", // legacy entry, kept for backwards compatibility
+	"sqlmap", "nikto", "nmap", "masscan", "zgrab", "nuclei",
+	"acunetix", "nessus", "openvas", "appscan",
+	"hydra", "metasploit", "burp", "wpscan",
+	"gobuster", "dirbuster", "dirsearch", "ffuf",
+}
+
+// wafServerlessLua is the serverless-pre-function body rendered in enforce
+// mode. It matches common SQLi (L1), XSS (L2) and path-traversal (L3)
+// signatures against the normalized URI + query args and short-circuits
+// with 403 before the request reaches any upstream.
+const wafServerlessLua = `return function(conf, ctx)
+	local lower = string.lower
+	local uri = lower(ngx.unescape_uri(ngx.var.uri or ""))
+	local args = lower(ngx.unescape_uri(ngx.var.args or ""))
+	local target = uri .. "?" .. args
+	local signatures = {
+		-- SQLi (L1)
+		"union%s+select", "select.+from.+information_schema",
+		"or%s+1%s*=%s*1", "and%s+1%s*=%s*1", "'%s*or%s*'",
+		"drop%s+table", "sleep%s*%(", "benchmark%s*%(",
+		"load_file%s*%(", "into%s+outfile",
+		-- XSS (L2)
+		"<%s*script", "javascript:", "onerror%s*=", "onload%s*=",
+		"onfocus%s*=", "document%.cookie", "document%.location",
+		"<%s*iframe", "eval%s*%(",
+		-- path traversal (L3)
+		"%.%./", "%.%.\\", "etc/passwd", "etc/shadow",
+		"boot%.ini", "win%.ini", "proc/self/environ",
+	}
+	for _, sig in ipairs(signatures) do
+		if string.find(target, sig) then
+			ngx.log(ngx.WARN, "meridian-waf: blocked request matching ", sig)
+			ngx.exit(403)
+		end
+	end
+end`
+
+// renderWAFPlugins writes the enforce-mode WAF plugin block for one route.
+// Rate-limiting and api-breaker are NOT rendered here — they live in
+// infra/apisix/limit-plugins.yaml and are orthogonal to this WAF block.
+func renderWAFPlugins(b *strings.Builder) {
+	b.WriteString("      ua-restriction:\n        denylist: [\"")
+	b.WriteString(strings.Join(wafUADenylist, "\", \""))
+	b.WriteString("\"]\n")
+	b.WriteString("      serverless-pre-function:\n        phase: rewrite\n        functions:\n          - |\n")
+	for _, line := range strings.Split(wafServerlessLua, "\n") {
+		b.WriteString("            " + line + "\n")
+	}
+}
+
 // renderAPISIX renders the route table + WAF mode as APISIX standalone YAML.
 func renderAPISIX(routes []RouteSpec, wafMode string) string {
 	var b strings.Builder
@@ -94,7 +149,7 @@ func renderAPISIX(routes []RouteSpec, wafMode string) string {
 			b.WriteString("      jwt-auth: {}\n")
 		}
 		if wafMode == "enforce" {
-			b.WriteString("      ua-restriction:\n        denylist: [\"blocked-agent\"]\n")
+			renderWAFPlugins(&b)
 		}
 		fmt.Fprintf(&b, "    upstream:\n      type: roundrobin\n      nodes:\n        \"%s\": %s\n", host, port)
 	}
