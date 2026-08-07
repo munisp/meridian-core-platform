@@ -1,0 +1,196 @@
+{
+  "uid": "meridian-funds-flow",
+  "title": "Meridian \u2014 Funds Flow",
+  "description": "Ledger/settlement/payment rails. Real metrics: redpanda_kafka_* (Redpanda :9644). PENDING INSTRUMENTATION: ledger_transfers_posted_total, ledger_pending_transfers, nip_dispatch_latency_seconds (tagged per Wave D constraint; see panel descriptions).",
+  "tags": [
+    "meridian",
+    "funds-flow"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Ledger posts",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "description": "PENDING INSTRUMENTATION \u2014 services/ledger emits no metrics yet; panel is the contract for ledger_transfers_posted_total.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(ledger_transfers_posted_total[5m]))",
+          "legendFormat": "posts/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "Pending transfers",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "description": "PENDING INSTRUMENTATION \u2014 gauge to be emitted by services/ledger (two-phase transfer backlog vs TigerBeetle).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ledger_pending_transfers",
+          "legendFormat": "pending"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "title": "payments.events.v1 produce rate (bytes/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Real: Redpanda /public_metrics.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (redpanda_topic) (rate(redpanda_kafka_request_bytes_total{redpanda_request=\"produce\", redpanda_topic=\"payments.events.v1\"}[5m]))",
+          "legendFormat": "produce B/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "title": "payments.events.v1 consumer lag",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (redpanda_topic, redpanda_partition) (redpanda_kafka_max_offset{redpanda_topic=\"payments.events.v1\"}) - on (redpanda_topic, redpanda_partition) group_right max by (redpanda_group, redpanda_topic, redpanda_partition) (redpanda_kafka_consumer_group_committed_offset)",
+          "legendFormat": "{{redpanda_group}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "title": "NIP dispatch latency (p95)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "description": "PENDING INSTRUMENTATION \u2014 settlement/NIP dispatch emits no latency histogram yet (nip_dispatch_latency_seconds).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(nip_dispatch_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95 s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "title": "DLQ depth (all *.dlq topics)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Real: *.dlq topics from infra/kafka/provision-topics.sh; depth = Redpanda high-watermark (no DLQ consumers).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (redpanda_topic) (max by (redpanda_topic, redpanda_partition) (redpanda_kafka_max_offset{redpanda_topic=~\".+\\\\.dlq\"}))",
+          "legendFormat": "{{redpanda_topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    }
+  ]
+}

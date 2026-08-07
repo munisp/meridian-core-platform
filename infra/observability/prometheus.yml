@@ -1,0 +1,132 @@
+# Meridian platform — Prometheus server config (closes Wave D gap D4).
+#
+# Scrape targets verified against infra/docker-compose.prod.yml and the service
+# sources (see per-job comments). App services currently expose /healthz and
+# /readyz only; their /metrics endpoints are PENDING INSTRUMENTATION — those
+# jobs carry the label instrumented="false" so up/down alerts (alerts.yml) can
+# scope to instrumented targets and not page on known-uninstrumented services.
+#
+# Deploy: mount this file at /etc/prometheus/prometheus.yml with alerts.yml as
+# the rule file, and an alertmanager reachable as alertmanager:9093.
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: meridian-prod
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels: {instrumented: "true"}
+
+  # APISIX gateway — prometheus plugin enabled on default routes
+  # (infra/apisix/limit-plugins.yaml: `prometheus: {}`), exporter bound in
+  # infra/apisix/config.yaml plugin_attr.prometheus.export_addr 0.0.0.0:9091.
+  # Emits apisix_http_status / apisix_bandwidth / apisix_http_latency /
+  # apisix_nginx_http_current_connections.
+  - job_name: apisix
+    static_configs:
+      - targets: ["apisix:9091"]
+        labels: {instrumented: "true"}
+
+  # Redpanda public metrics (low-cardinality operator endpoint) on the admin
+  # port mapped in docker-compose.prod.yml (9644). Emits
+  # redpanda_kafka_max_offset, redpanda_kafka_consumer_group_committed_offset,
+  # redpanda_kafka_request_bytes_total, redpanda_kafka_under_replicated_replicas,
+  # redpanda_application_uptime_seconds_total, ...
+  - job_name: redpanda
+    metrics_path: /public_metrics
+    static_configs:
+      - targets: ["redpanda:9644"]
+        labels: {instrumented: "true"}
+
+  # Temporal server (temporalio/auto-setup in docker-compose.prod.yml).
+  # The server emits metrics only when metrics.prometheus.listenAddress is set
+  # in the server config; the stock auto-setup image does NOT expose a metrics
+  # port. Enable it (e.g. 0.0.0.0:9090 via DYNAMIC_CONFIG / config template),
+  # publish the port, then flip instrumented to "true".
+  - job_name: temporal
+    static_configs:
+      - targets: ["temporal:9090"]
+        labels: {instrumented: "false"}  # pending: metrics endpoint not yet enabled in compose
+
+  # ---------------------------------------------------------- app services
+  # Ports verified in source (httpx.Port(...) / uvicorn defaults). None of
+  # these services expose /metrics today — PENDING INSTRUMENTATION. Targets are
+  # kept so that `up` and the pending-instrumentation panels are honest, but
+  # they are excluded from paging alerts via instrumented="false".
+  - job_name: admin-api            # services/admin-api/main.go PORT default 8095
+    static_configs:
+      - targets: ["admin-api:8095"]
+        labels: {instrumented: "false"}
+  - job_name: rules-engine         # services/rules-engine/app/main.py PORT default 8001
+    static_configs:
+      - targets: ["rules-engine:8001"]
+        labels: {instrumented: "false"}
+  - job_name: rp-registry          # services/rp-registry/main.go PORT default 8002
+    static_configs:
+      - targets: ["rp-registry:8002"]
+        labels: {instrumented: "false"}
+  - job_name: tin-graph            # services/tin-graph/main.go PORT default 8003
+    static_configs:
+      - targets: ["tin-graph:8003"]
+        labels: {instrumented: "false"}
+  - job_name: audit-evidence       # services/audit-evidence/main.go PORT default 8004
+    static_configs:
+      - targets: ["audit-evidence:8004"]
+        labels: {instrumented: "false"}
+  - job_name: geo                  # services/geo/main.go PORT default 8005
+    static_configs:
+      - targets: ["geo:8005"]
+        labels: {instrumented: "false"}
+  - job_name: notification         # services/notification/main.go PORT default 8006
+    static_configs:
+      - targets: ["notification:8006"]
+        labels: {instrumented: "false"}
+  - job_name: consent              # services/consent/main.go PORT default 8007
+    static_configs:
+      - targets: ["consent:8007"]
+        labels: {instrumented: "false"}
+  - job_name: search-indexer       # services/search-indexer/main.go PORT default 8008
+    static_configs:
+      - targets: ["search-indexer:8008"]
+        labels: {instrumented: "false"}
+  - job_name: edge-policy          # services/edge-policy/main.go PORT default 8009
+    static_configs:
+      - targets: ["edge-policy:8009"]
+        labels: {instrumented: "false"}
+  - job_name: ledger               # services/ledger/main.go PORT default 8010
+    static_configs:
+      - targets: ["ledger:8010"]
+        labels: {instrumented: "false"}
+  - job_name: migration            # services/migration/main.go PORT default 8011
+    static_configs:
+      - targets: ["migration:8011"]
+        labels: {instrumented: "false"}
+  - job_name: reg-watch            # services/reg-watch/app/main.py PORT default 8011 (collision with migration — fix port at deploy time)
+    static_configs:
+      - targets: ["reg-watch:8011"]
+        labels: {instrumented: "false"}
+  - job_name: feature-store        # services/feature-store/app/main.py PORT default 8012
+    static_configs:
+      - targets: ["feature-store:8012"]
+        labels: {instrumented: "false"}
+  - job_name: settlement           # services/settlement/app/main.py PORT default 8013
+    static_configs:
+      - targets: ["settlement:8013"]
+        labels: {instrumented: "false"}
+
+  # STR / AML filing service: DOES NOT EXIST yet (Wave D D2 finding — no str.*
+  # topics, no service). Job intentionally omitted; add when the service lands.
+  # The str_dlq_depth / str_submission_errors_total alerts in alerts.yml are
+  # tagged instrumentation: pending accordingly.

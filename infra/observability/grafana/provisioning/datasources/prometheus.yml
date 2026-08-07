@@ -1,0 +1,12 @@
+# Grafana datasource provisioning (closes Wave D gaps D1/D4 dashboards).
+# Mount at /etc/grafana/provisioning/datasources/. Prometheus URL overridable
+# via env at container start.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: ${PROMETHEUS_URL:-http://prometheus:9090}
+    isDefault: true
+    editable: false

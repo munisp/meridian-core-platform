@@ -1,0 +1,46 @@
+# Meridian platform — Alertmanager config (closes Wave D gap D4).
+#
+# Minimal routing. The receiver is a webhook whose URL is injected from the
+# environment at deploy time (envsubst / secret mount) — it is deliberately a
+# placeholder; wire it to the on-call bridge (PagerDuty/Opsgenie/Teams) before
+# enabling in production. No receiver here claims to be production-ready.
+#
+# Deploy: envsubst < alertmanager.yml > /etc/alertmanager/alertmanager.yml
+# with ALERTMANAGER_WEBHOOK_URL set from the vault.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: webhook-placeholder
+  group_by: ["alertname", "severity", "team"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Critical platform/compliance alerts page immediately.
+    - matchers: ['severity = "critical"']
+      receiver: webhook-placeholder
+      repeat_interval: 1h
+    # Info-level pending-instrumentation reminders are batched daily so they
+    # stay visible without paging while services lack /metrics (Wave D D2).
+    - matchers: ['instrumentation = "pending"']
+      receiver: webhook-placeholder
+      repeat_interval: 24h
+
+receivers:
+  - name: webhook-placeholder
+    webhook_configs:
+      - url: "${ALERTMANAGER_WEBHOOK_URL}"  # required at deploy time; no default
+        send_resolved: true
+
+inhibit_rules:
+  # Don't spam the warning DLQ alert when the critical one is already firing
+  # for the same topic.
+  - source_matchers: ['alertname = "KafkaDlqDepthCritical"']
+    target_matchers: ['alertname = "KafkaDlqDepthWarning"']
+    equal: ["redpanda_topic"]
+  # Same for the pending STR DLQ pair.
+  - source_matchers: ['alertname = "StrDlqDepthCritical"']
+    target_matchers: ['alertname = "StrDlqDepthWarning"']
+    equal: ["team"]
