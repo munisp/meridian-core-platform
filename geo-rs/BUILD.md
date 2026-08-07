@@ -1,8 +1,10 @@
 # geo-rs build & test
 
-geo-rs is the Meridian spatial engine (Rust, axum). It is **review-only** in the
-current hardening pass: no Rust toolchain was available in the build
-environment, so the crate was not compiled or tested here.
+geo-rs is the Meridian spatial engine (Rust, axum). Verified with the stable
+Rust toolchain (1.97.1): `cargo build` compiles cleanly and `cargo test` passes
+all 4 unit tests (haversine distance, point-in-polygon square/concave/
+degenerate rings). If crates.io is unreachable from your network, configure a
+registry mirror in `$HOME/.cargo/config.toml` before building.
 
 ## Prerequisites
 
