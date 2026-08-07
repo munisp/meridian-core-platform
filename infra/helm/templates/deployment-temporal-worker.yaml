@@ -1,0 +1,59 @@
+# Temporal cluster (frontend/history/matching/worker roles) Deployment +
+# probes (B6/D3). Uses temporalio/auto-setup like docker-compose.prod.yml so
+# schema setup runs on boot; tctl ships in this image, so the readiness probe
+# is the real cluster-health check and liveness is a frontend TCP check.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-worker
+  namespace: data
+  labels:
+    app: temporal
+spec:
+  replicas: {{ .Values.workloads.temporalWorker.replicas | default 1 }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: temporal
+  template:
+    metadata:
+      labels:
+        app: temporal
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: temporal
+          image: {{ .Values.workloads.temporalWorker.image | default "temporalio/auto-setup:1.24.2" }}
+          env:
+            - {name: DB, value: postgresql}
+            - {name: DB_PORT, value: "5432"}
+            - {name: POSTGRES_SEEDS, value: postgres.data.svc.cluster.local}
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: temporal-db, key: username}}
+            - name: POSTGRES_PWD
+              valueFrom: {secretKeyRef: {name: temporal-db, key: password}}
+          ports:
+            - {containerPort: 7233, protocol: TCP} # frontend gRPC
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["tctl", "--address", "localhost:7233", "cluster", "health"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 20
+          livenessProbe:
+            tcpSocket: {port: 7233}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: {cpu: "500m", memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}

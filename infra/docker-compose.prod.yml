@@ -101,11 +101,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Temporal server (frontend/history/matching/worker roles via auto-setup).
+    # tctl ships in this image — this is the appropriate healthcheck (B6);
+    # alert name: TemporalClusterUnhealthy. Remediation: infra/README.md.
     healthcheck:
       test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health | grep -q SERVING"]
       interval: 15s
       timeout: 5s
       retries: 20
+      start_period: 60s
     deploy:
       resources:
         limits: { cpus: "2.0", memory: 2G }
@@ -214,14 +218,32 @@ services:
     depends_on:
       tigerbeetle-init:
         condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 3000"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
+    # NOTE (B6): the tigerbeetle image is a single static binary (no shell,
+    # no nc) — an in-container healthcheck cannot run. Health is provided by
+    # the tigerbeetle-sidecar TCP probe below; alert name: TigerBeetleDown.
     deploy:
       resources:
         limits: { cpus: "2.0", memory: 2G }
+
+  # tigerbeetle-sidecar (B6): real TCP health signal for the TigerBeetle
+  # replica. The TB container is a static binary, so the TCP port check runs
+  # from this busybox sidecar; its healthcheck reflects replica health and
+  # restart:unless-stopped remediates probe failures (see infra/README.md).
+  tigerbeetle-sidecar:
+    image: busybox:1.36
+    restart: unless-stopped
+    command: ["sh", "-c", "while nc -z tigerbeetle 3000; do sleep 10; done; exit 1"]
+    depends_on:
+      - tigerbeetle
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z tigerbeetle 3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "0.05", memory: 16M }
 
   tigerbeetle-init:
     image: ghcr.io/tigerbeetle/tigerbeetle:0.16.4

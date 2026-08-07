@@ -1,0 +1,71 @@
+# TigerBeetle replica Deployment + probes (B6/D3).
+# Single replica (Recreate) — mirrors docker-compose.prod.yml. For a 3-node
+# cluster convert to a StatefulSet with one volumeClaimTemplate per replica.
+# The TB image is a static binary (no shell), so probes are tcpSocket on the
+# replica port — the only probe type that works for this image.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigerbeetle
+  namespace: data
+  labels:
+    app: tigerbeetle
+spec:
+  replicas: {{ .Values.workloads.tigerbeetle.replicas | default 1 }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tigerbeetle
+  template:
+    metadata:
+      labels:
+        app: tigerbeetle
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tigerbeetle
+          image: {{ .Values.workloads.tigerbeetle.image | default "ghcr.io/tigerbeetle/tigerbeetle:0.16.4" }}
+          args: ["start", "--addresses=0.0.0.0:3000", "/data/0_0.tigerbeetle"]
+          ports:
+            - {containerPort: 3000, protocol: TCP}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket: {port: 3000}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket: {port: 3000}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: {cpu: "500m", memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          volumeMounts:
+            - {name: tbdata, mountPath: /data}
+      volumes:
+        - name: tbdata
+          persistentVolumeClaim:
+            claimName: tigerbeetle-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tigerbeetle-data
+  namespace: data
+  labels:
+    app: tigerbeetle
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.workloads.tigerbeetle.storage | default "20Gi" }}
