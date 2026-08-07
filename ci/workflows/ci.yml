@@ -31,6 +31,10 @@ jobs:
         run: |
           set -e
           pip install pytest httpx
+          # meridian_events lives in packages/events/python (not pip-published);
+          # without this the rules-engine (et al.) suites fail collection with
+          # ModuleNotFoundError: meridian_events (reproduced: 7 collection errors).
+          export PYTHONPATH="$PWD/packages/events/python${PYTHONPATH:+:$PYTHONPATH}"
           for d in services/rules-engine services/feature-store services/reg-watch services/settlement; do
             if [ -f "$d/requirements.txt" ]; then pip install -r "$d/requirements.txt"; fi
             if [ -d "$d/tests" ]; then (cd "$d" && python -m pytest -q); fi
