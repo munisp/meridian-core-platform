@@ -1,0 +1,196 @@
+{
+  "uid": "meridian-compliance",
+  "title": "Meridian \u2014 Compliance / STR",
+  "description": "STR/AML and filing compliance. Real metrics: redpanda_kafka_* DLQ depth and tax.filings.v1 ingest. PENDING INSTRUMENTATION: str_dlq_depth, str_submission_errors_total, tax_filings_submitted_total, einvoice_clearance_total (Wave D D2 \u2014 tagged per constraint).",
+  "tags": [
+    "meridian",
+    "compliance"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "STR DLQ depth",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "description": "PENDING INSTRUMENTATION \u2014 no STR filing service exists yet (Wave D D2); alert contract StrDlqDepth* in alerts.yml. Interim: any str.*.dlq Kafka topic would appear in the DLQ panel below.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "str_dlq_depth",
+          "legendFormat": "dlq depth"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "Kafka DLQ depth (all *.dlq topics)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Real: tax.filings.v1.dlq, payments.events.v1.dlq, kyc.evidence.v1.dlq, audit.events.v1.dlq, notifications.out.v1.dlq.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (redpanda_topic) (max by (redpanda_topic, redpanda_partition) (redpanda_kafka_max_offset{redpanda_topic=~\".+\\\\.dlq\"}))",
+          "legendFormat": "{{redpanda_topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "title": "Tax filings ingest rate (bytes/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(redpanda_kafka_request_bytes_total{redpanda_request=\"produce\", redpanda_topic=\"tax.filings.v1\"}[5m]))",
+          "legendFormat": "filings B/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "title": "Filings submitted",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "description": "PENDING INSTRUMENTATION \u2014 no filing counter emitted yet.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(tax_filings_submitted_total[5m]))",
+          "legendFormat": "filings/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "title": "E-invoice clearance rate",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "description": "PENDING INSTRUMENTATION \u2014 e-invoice clearance service emits no metrics yet.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(einvoice_clearance_total{result=\"cleared\"}[5m])) / sum(rate(einvoice_clearance_total[5m]))",
+          "legendFormat": "clearance ratio"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "title": "STR submission errors",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "description": "PENDING INSTRUMENTATION \u2014 contract metric for the future STR service (see meridian.compliance alerts).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(str_submission_errors_total[15m]))",
+          "legendFormat": "errors/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    }
+  ]
+}

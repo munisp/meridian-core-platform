@@ -1,0 +1,16 @@
+# Grafana dashboard provisioning. Mount at
+# /etc/grafana/provisioning/dashboards/; dashboard JSON files live in
+# ../dashboards/ relative to this repo dir (mount at /var/lib/grafana/dashboards).
+apiVersion: 1
+
+providers:
+  - name: meridian
+    orgId: 1
+    folder: Meridian
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
