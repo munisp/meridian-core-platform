@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	neturl "net/url"
 	"os"
 	"time"
 
@@ -209,6 +210,36 @@ func (s *PgStore) Update(coll, id string, v any, fn func(current any) (any, erro
 	return tx.Commit(ctx)
 }
 
+// ResolveDatabaseURL applies assurance DB privilege separation (w2 §6A #1):
+// when DB_USER is set, the per-service least-privilege credentials
+// (DB_USER/DB_PASSWORD) replace any credentials embedded in DATABASE_URL.
+// Compat path: if DB_USER is unset the shared DATABASE_URL user is used —
+// with a loud startup warning outside prod, and a startup refusal when
+// PROFILE=prod (privilege separation is mandatory in production).
+func ResolveDatabaseURL() string {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		return ""
+	}
+	user := os.Getenv("DB_USER")
+	if user == "" {
+		if os.Getenv("PROFILE") == "prod" {
+			log.Fatal("profile=prod FATAL: DB_USER (per-service least-privilege role, see " +
+				"infra/postgres/migrations/0003_roles.sql) is required; refusing to start on the shared database user")
+		}
+		log.Printf("profile=dev component=store WARNING: DB_USER unset — using the SHARED database user from DATABASE_URL; " +
+			"privilege separation is NOT enforced (set DB_USER/DB_PASSWORD per service)")
+		return url
+	}
+	u, err := neturl.Parse(url)
+	if err != nil {
+		log.Printf("component=store WARNING: unparseable DATABASE_URL (%v); using as-is", err)
+		return url
+	}
+	u.User = neturl.UserPassword(user, os.Getenv("DB_PASSWORD"))
+	return u.String()
+}
+
 // OpenFromEnv selects the store per HARDENING H1, failing closed:
 //
 //   - DATABASE_URL set -> Postgres is REQUIRED; a connection failure is a
@@ -218,7 +249,7 @@ func (s *PgStore) Update(coll, id string, v any, fn func(current any) (any, erro
 //   - DATABASE_URL unset -> the embedded JSON store is allowed only outside
 //     prod; PROFILE=prod refuses to boot without DATABASE_URL.
 func OpenFromEnv(dir string) (DocStore, error) {
-	if url := os.Getenv("DATABASE_URL"); url != "" {
+	if url := ResolveDatabaseURL(); url != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		pg, err := OpenPg(ctx, url)

@@ -1,0 +1,61 @@
+# Postgres backup CronJob (assurance F-12). One pg_dump cycle per schedule
+# for all service databases; ships to the versioned MinIO backup bucket.
+# Secrets come from the `postgres-backup` Secret (BACKUP_POSTGRES_USER /
+# BACKUP_POSTGRES_PASSWORD) — never inline credentials here.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-backup
+  namespace: data
+  labels:
+    app: pg-backup
+spec:
+  schedule: "0 3 * * *"   # daily 03:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: pg-backup
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: pg-backup
+              # postgres:16 image ships pg_dump; minio/mc layered via init or
+              # use a tooling image containing both pg_dump and mc.
+              image: postgres:16-alpine
+              command: ["/bin/sh", "/backup/backup.sh"]
+              env:
+                - {name: PGHOST, value: postgres.data.svc.cluster.local}
+                - {name: PGPORT, value: "5432"}
+                - name: BACKUP_DATABASES
+                  value: "meridian"   # space-separated list of service DBs
+                - name: BACKUP_S3_BUCKET
+                  value: meridian-pg-backups
+                - name: BACKUP_RETENTION_DAYS
+                  value: "30"
+                - name: BACKUP_POSTGRES_USER
+                  valueFrom: {secretKeyRef: {name: postgres-backup, key: username}}
+                - name: BACKUP_POSTGRES_PASSWORD
+                  valueFrom: {secretKeyRef: {name: postgres-backup, key: password}}
+              volumeMounts:
+                - {name: backup-script, mountPath: /backup, readOnly: true}
+                - {name: backup-data, mountPath: /backups}
+              resources:
+                requests: {cpu: "100m", memory: 128Mi}
+                limits: {cpu: "500m", memory: 512Mi}
+          volumes:
+            - name: backup-script
+              configMap:
+                name: pg-backup-script   # kubectl create configmap pg-backup-script --from-file=infra/backup/backup.sh
+            - name: backup-data
+              persistentVolumeClaim:
+                claimName: pg-backups

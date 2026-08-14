@@ -38,3 +38,19 @@ services:
   settlement: {}
   tin-graph: {}
   kyc-worker: {}
+
+# Stateful middleware workloads (fix/health-probes Deployment templates):
+# required so dev render doesn't nil-pointer on .Values.workloads.
+workloads:
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.4
+    replicas: 1
+    storage: 5Gi
+  temporalWorker:
+    image: temporalio/auto-setup:1.24.2
+    replicas: 1
+
+# Observability stack (templates/observability.yaml): off in dev — the
+# docker-compose profile carries prometheus/alertmanager/grafana locally.
+observability:
+  enabled: false

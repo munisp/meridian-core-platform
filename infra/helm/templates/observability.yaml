@@ -1,0 +1,181 @@
+# Observability stack (Prometheus + Alertmanager + Grafana) — assurance D4/D2.
+# Rendered only when .Values.observability.enabled is true (prod default;
+# dev keeps it off — compose covers the dev profile). Configs are the same
+# files used by docker-compose.prod.yml (infra/observability/*), embedded as
+# ConfigMaps so helm and compose cannot drift.
+{{- if .Values.observability.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+{{ .Files.Get "files/prometheus.yml" | indent 4 }}
+  alerts.yml: |
+{{ .Files.Get "files/alerts.yml" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+data:
+  alertmanager.yml: |
+{{ .Files.Get "files/alertmanager.yml" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels: {app: prometheus}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: prometheus}
+  template:
+    metadata:
+      labels: {app: prometheus}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: prometheus
+          image: {{ .Values.observability.prometheus.image | default "prom/prometheus:v2.53.0" }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time={{ .Values.observability.prometheus.retention | default "30d" }}
+          ports:
+            - {containerPort: 9090, protocol: TCP}
+          readinessProbe:
+            httpGet: {path: /-/ready, port: 9090}
+          livenessProbe:
+            httpGet: {path: /-/healthy, port: 9090}
+          volumeMounts:
+            - {name: config, mountPath: /etc/prometheus, readOnly: true}
+            - {name: data, mountPath: /prometheus}
+          resources:
+            requests: {cpu: "250m", memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
+      volumes:
+        - name: config
+          configMap: {name: prometheus-config}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  selector: {app: prometheus}
+  ports:
+    - {name: http, port: 9090, targetPort: 9090}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels: {app: alertmanager}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: alertmanager}
+  template:
+    metadata:
+      labels: {app: alertmanager}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: alertmanager
+          image: {{ .Values.observability.alertmanager.image | default "prom/alertmanager:v0.27.0" }}
+          ports:
+            - {containerPort: 9093, protocol: TCP}
+          readinessProbe:
+            httpGet: {path: /-/ready, port: 9093}
+          livenessProbe:
+            httpGet: {path: /-/healthy, port: 9093}
+          volumeMounts:
+            - {name: config, mountPath: /etc/alertmanager, readOnly: true}
+          resources:
+            requests: {cpu: "50m", memory: 64Mi}
+            limits: {cpu: "250m", memory: 256Mi}
+      volumes:
+        - name: config
+          configMap: {name: alertmanager-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  selector: {app: alertmanager}
+  ports:
+    - {name: http, port: 9093, targetPort: 9093}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels: {app: grafana}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: grafana}
+  template:
+    metadata:
+      labels: {app: grafana}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: grafana
+          image: {{ .Values.observability.grafana.image | default "grafana/grafana:11.0.0" }}
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom: {secretKeyRef: {name: grafana-admin, key: username}}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: grafana-admin, key: password}}
+            - {name: GF_USERS_ALLOW_SIGN_UP, value: "false"}
+          ports:
+            - {containerPort: 3000, protocol: TCP}
+          readinessProbe:
+            httpGet: {path: /api/health, port: 3000}
+          volumeMounts:
+            - {name: provisioning, mountPath: /etc/grafana/provisioning, readOnly: true}
+            - {name: dashboards, mountPath: /var/lib/grafana/dashboards, readOnly: true}
+          resources:
+            requests: {cpu: "100m", memory: 128Mi}
+            limits: {cpu: "500m", memory: 512Mi}
+      volumes:
+        # Provisioning + dashboards are the infra/observability/grafana tree,
+        # applied out-of-band: kubectl create configmap grafana-provisioning
+        # --from-file=infra/observability/grafana/provisioning (and
+        # grafana-dashboards --from-file=.../grafana/dashboards).
+        - name: provisioning
+          configMap: {name: grafana-provisioning}
+        - name: dashboards
+          configMap: {name: grafana-dashboards}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  selector: {app: grafana}
+  ports:
+    - {name: http, port: 3000, targetPort: 3000}
+{{- end }}

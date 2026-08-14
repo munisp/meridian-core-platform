@@ -159,3 +159,16 @@ workloads:
   temporalWorker:
     image: temporalio/auto-setup:1.24.2
     replicas: 1
+
+# Observability stack (templates/observability.yaml; assurance D4/D2).
+# Configs embedded from helm/files/ (copies of infra/observability/*);
+# Grafana admin from the grafana-admin Secret.
+observability:
+  enabled: true
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    retention: 30d
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+  grafana:
+    image: grafana/grafana:11.0.0
