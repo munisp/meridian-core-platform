@@ -27,7 +27,9 @@ plugins:
   - cors
   - jwt-auth
   - openid-connect
+  - limit-req
   - limit-count
+  - api-breaker
   - prometheus
   - ip-restriction
 plugin_attr:

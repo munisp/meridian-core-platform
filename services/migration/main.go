@@ -22,6 +22,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+
+	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,7 +203,8 @@ func main() {
 
 	addr := ":" + env("PORT", "8011")
 	log.Printf("%s %s on %s (key=%s)", service, version, addr, keyID)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	// F-5: graceful shutdown on SIGTERM/SIGINT + full server timeouts.
+	log.Fatal(httpx.ListenAndServe(addr, mux))
 }
 
 func env(k, def string) string {

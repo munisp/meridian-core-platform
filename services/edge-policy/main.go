@@ -119,9 +119,80 @@ const wafServerlessLua = `return function(conf, ctx)
 	end
 end`
 
+// limitPolicy is the per-route-class rate-limiting / load-shedding policy
+// (F-1: previously documentation-only in infra/apisix/limit-plugins.yaml —
+// nothing applied it. renderAPISIX now renders it per route so APISIX
+// actually enforces SPEC B §3/§4). Counter keys match the YAML policy:
+// per-TIN via the X-TIN header injected from JWT claims, else remote_addr.
+type limitPolicy struct {
+	// limit-req (leaky bucket per key)
+	Rate int // requests/second
+	Burst int
+	Key  string // APISIX key expression, e.g. remote_addr / http_x_tin
+	// limit-count (fixed window); zero disables
+	Count      int
+	TimeWindow int // seconds
+	// api-breaker
+	APIBreaker bool
+	// X-Load-Class header for load shedding (SPEC B §4)
+	LoadClass string
+}
+
+// defaultLimitPolicy is the baseline applied to every public route
+// (mirrors default_route_plugins in infra/apisix/limit-plugins.yaml).
+var defaultLimitPolicy = limitPolicy{Rate: 20, Burst: 40, Key: "remote_addr", APIBreaker: true, LoadClass: "standard"}
+
+// limitClassRules are the route-class overrides, first match wins
+// (mirrors the routes table in infra/apisix/limit-plugins.yaml).
+var limitClassRules = []struct {
+	Prefix string
+	Method string // "" = any
+	Policy limitPolicy
+}{
+	// OTP: 100/day per TIN + 2 r/s per IP (SPEC B §3).
+	{"/v1/auth/otp", "POST", limitPolicy{Rate: 2, Burst: 4, Key: "remote_addr", Count: 100, TimeWindow: 86400, LoadClass: "standard"}},
+	// Filings/payments: 20 r/s per TIN, never shed below the hard cap.
+	{"/v1/filings", "POST", limitPolicy{Rate: 20, Burst: 40, Key: "http_x_tin", APIBreaker: true, LoadClass: "critical"}},
+	{"/v1/payments", "POST", limitPolicy{Rate: 20, Burst: 40, Key: "http_x_tin", APIBreaker: true, LoadClass: "critical"}},
+	// Shed-first classes (SPEC B §4): batch/export, then autocomplete.
+	{"/v1/exports", "", limitPolicy{Rate: 5, Burst: 5, Key: "http_x_tin", LoadClass: "sheddable-batch"}},
+	{"/v1/search/autocomplete", "GET", limitPolicy{Rate: 50, Burst: 50, Key: "remote_addr", LoadClass: "sheddable-search"}},
+}
+
+// limitPolicyFor resolves the rate-limit policy for one route.
+func limitPolicyFor(r RouteSpec) limitPolicy {
+	for _, rule := range limitClassRules {
+		if !strings.HasPrefix(r.PathPrefix, rule.Prefix) {
+			continue
+		}
+		if rule.Method == "" {
+			return rule.Policy
+		}
+		for _, m := range r.Methods {
+			if strings.EqualFold(m, rule.Method) {
+				return rule.Policy
+			}
+		}
+	}
+	return defaultLimitPolicy
+}
+
+// renderLimitPlugins writes the rate-limit / load-shedding plugin block for
+// one route (F-1).
+func renderLimitPlugins(b *strings.Builder, p limitPolicy) {
+	fmt.Fprintf(b, "      limit-req:\n        rate: %d\n        burst: %d\n        key: %s\n        rejected_code: 429\n",
+		p.Rate, p.Burst, p.Key)
+	if p.Count > 0 {
+		fmt.Fprintf(b, "      limit-count:\n        count: %d\n        time_window: %d\n        key: http_x_tin\n        rejected_code: 429\n",
+			p.Count, p.TimeWindow)
+	}
+	if p.APIBreaker {
+		b.WriteString("      api-breaker:\n        break_response_code: 503\n        unhealthy: {http_statuses: [500], failures: 3}\n        healthy: {successes: 2, timeout: 30}\n")
+	}
+	fmt.Fprintf(b, "      proxy-rewrite:\n        headers: {X-Load-Class: %s}\n", p.LoadClass)
+}
+
 // renderWAFPlugins writes the enforce-mode WAF plugin block for one route.
-// Rate-limiting and api-breaker are NOT rendered here — they live in
-// infra/apisix/limit-plugins.yaml and are orthogonal to this WAF block.
 func renderWAFPlugins(b *strings.Builder) {
 	b.WriteString("      ua-restriction:\n        denylist: [\"")
 	b.WriteString(strings.Join(wafUADenylist, "\", \""))
@@ -148,6 +219,8 @@ func renderAPISIX(routes []RouteSpec, wafMode string) string {
 		if r.Auth {
 			b.WriteString("      jwt-auth: {}\n")
 		}
+		// F-1: rate limiting is enforced per route class, not docs-only.
+		renderLimitPlugins(&b, limitPolicyFor(r))
 		if wafMode == "enforce" {
 			renderWAFPlugins(&b)
 		}

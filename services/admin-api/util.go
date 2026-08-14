@@ -138,11 +138,47 @@ func postJSON(client *http.Client, url string, body any, out any) error {
 
 // ---------- CORS ----------
 
+// withCORS applies an explicit origin allowlist (F-2). Previously it set
+// Access-Control-Allow-Origin: * unconditionally while allowing the
+// Authorization header — any website could issue credentialed cross-origin
+// reads to admin-api from a browser.
+//
+// Policy:
+//   - CORS_ALLOWED_ORIGINS is a comma-separated allowlist; a matching
+//     request Origin is echoed (with Vary: Origin) and may send
+//     Authorization.
+//   - PROFILE=prod REQUIRES CORS_ALLOWED_ORIGINS (fail-closed at startup);
+//     wildcard is never allowed with Authorization.
+//   - Outside prod an unset allowlist falls back to "*" but WITHOUT the
+//     Authorization/X-Dev-Role headers (credentialed dev flows must set the
+//     allowlist explicitly, e.g. http://localhost:3000).
 func withCORS(next http.Handler) http.Handler {
+	prod := os.Getenv("PROFILE") == "prod"
+	allow := map[string]bool{}
+	for _, o := range strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ",") {
+		if o = strings.TrimSpace(o); o != "" && o != "*" {
+			allow[o] = true
+		}
+	}
+	if prod && len(allow) == 0 {
+		log.Fatalf("component=admin-api FATAL: PROFILE=prod requires CORS_ALLOWED_ORIGINS (explicit origins; wildcard with Authorization refused)")
+	}
+	allowHeaders := "Content-Type"
+	if len(allow) > 0 {
+		allowHeaders = "Authorization,Content-Type,X-Dev-Role"
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		switch {
+		case origin != "" && allow[origin]:
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		case !prod && len(allow) == 0:
+			// dev wildcard — no credentialed headers allowed
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization,Content-Type,X-Dev-Role")
+		w.Header().Set("Access-Control-Allow-Headers", allowHeaders)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

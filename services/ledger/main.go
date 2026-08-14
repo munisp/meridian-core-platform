@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -27,6 +28,20 @@ const (
 	service = "ledger"
 	version = "0.1.0"
 )
+
+// devClientProfileOK enforces F-7: the in-mem DevClient may boot only with an
+// explicit PROFILE=dev; PROFILE=prod without TIGERBEETLE_ADDRESSES is a boot
+// error, and so is an unset/other profile (no implicit dev in-memory ledger).
+func devClientProfileOK(profile string) error {
+	switch profile {
+	case "dev":
+		return nil
+	case "prod":
+		return fmt.Errorf("profile=prod requires TIGERBEETLE_ADDRESSES; refusing to boot the in-mem DevClient")
+	default:
+		return fmt.Errorf("TIGERBEETLE_ADDRESSES unset and PROFILE=%q; the in-mem DevClient requires explicit PROFILE=dev", profile)
+	}
+}
 
 // snapshotFile is the durable dev snapshot (atomic rewrite on change).
 type snapshot struct {
@@ -65,6 +80,13 @@ func main() {
 		client = rc
 		defer rc.Close()
 	} else {
+		// FAIL CLOSED (F-7): the in-mem DevClient is the financial system of
+		// record's dev stand-in — booting it must be an explicit choice. An
+		// env omission in a prod deploy must never run the ledger on
+		// ephemeral in-memory state.
+		if err := devClientProfileOK(os.Getenv("PROFILE")); err != nil {
+			log.Fatalf("component=ledger FATAL: %v", err)
+		}
 		log.Printf("profile=dev component=ledger in-mem")
 		dev = tb.NewDevClient()
 		client = dev

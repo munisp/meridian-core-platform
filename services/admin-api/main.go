@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+
+	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"os"
 	"time"
 
@@ -42,6 +44,9 @@ func main() {
 			log.Fatalf("component=admin-api FATAL: DATABASE_URL set but Postgres connect failed (%v); failing closed", err)
 		}
 		log.Printf("component=admin-api postgres unavailable (%v); dev in-mem fallback", err)
+	} else if pg == nil && os.Getenv("PROFILE") == "prod" {
+		// F-7: prod must never run user state on the seeded in-mem store.
+		log.Fatalf("component=admin-api FATAL: PROFILE=prod requires DATABASE_URL; refusing the in-mem store")
 	} else if pg != nil {
 		a.pg = pg
 		defer pg.conn.Close(context.Background())
@@ -140,7 +145,8 @@ func main() {
 
 	port := envOr("PORT", "8095")
 	log.Printf("admin-api %s listening on :%s (AUTH_MODE=%s)", version, port, a.authMode)
-	log.Fatal(http.ListenAndServe(":"+port, withCORS(mux)))
+	// F-5: graceful shutdown on SIGTERM/SIGINT + full server timeouts.
+	log.Fatal(httpx.ListenAndServe(":"+port, withCORS(mux)))
 }
 
 func (a *app) handleHealthz(w http.ResponseWriter, r *http.Request) {
