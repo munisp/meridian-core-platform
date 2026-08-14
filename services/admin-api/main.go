@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+
+	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"os"
 	"time"
 
@@ -143,7 +145,8 @@ func main() {
 
 	port := envOr("PORT", "8095")
 	log.Printf("admin-api %s listening on :%s (AUTH_MODE=%s)", version, port, a.authMode)
-	log.Fatal(http.ListenAndServe(":"+port, withCORS(mux)))
+	// F-5: graceful shutdown on SIGTERM/SIGINT + full server timeouts.
+	log.Fatal(httpx.ListenAndServe(":"+port, withCORS(mux)))
 }
 
 func (a *app) handleHealthz(w http.ResponseWriter, r *http.Request) {
