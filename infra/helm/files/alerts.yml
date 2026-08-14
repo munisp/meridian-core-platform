@@ -1,0 +1,192 @@
+# Meridian platform — Prometheus alert rules (closes Wave D gaps D2 + D4).
+#
+# Metric provenance:
+#   - up                                            : Prometheus scrape health (all jobs in prometheus.yml)
+#   - apisix_http_status, apisix_http_latency       : APISIX prometheus plugin (infra/apisix/config.yaml, port 9091)
+#   - redpanda_kafka_max_offset,
+#     redpanda_kafka_consumer_group_committed_offset,
+#     redpanda_kafka_under_replicated_replicas      : Redpanda /public_metrics (:9644)
+#   - service_errors_total                          : Temporal server (tally/prometheus exporter) —
+#                                                     REQUIRES enabling metrics.prometheus.listenAddress
+#                                                     on the temporal container; rule is tagged
+#                                                     instrumentation: pending until then.
+#   - str_dlq_depth, str_submission_errors_total,
+#     consumer_errors_total, tigerbeetle_up         : NOT EMITTED BY ANY SERVICE TODAY (Wave D D2).
+#                                                     Rules exist with instrumentation: pending so
+#                                                     instrumentation work has a contract to land against;
+#                                                     they will simply not fire until the metric exists.
+#
+# DLQ topics (*.dlq) are real: infra/kafka/provision-topics.sh creates
+# tax.filings.v1.dlq, payments.events.v1.dlq, kyc.evidence.v1.dlq,
+# audit.events.v1.dlq, notifications.out.v1.dlq — depth is computed from
+# Redpanda partition high-watermark offsets (DLQ topics have no consumers).
+
+groups:
+  # ---------------------------------------------------------- platform health
+  - name: meridian.platform
+    interval: 30s
+    rules:
+      - alert: ServiceDown
+        # Scoped to instrumented targets only; uninstrumented services
+        # (instrumented="false") expose /healthz but no /metrics yet.
+        expr: up{instrumented="true"} == 0
+        for: 2m
+        labels: {severity: critical, team: platform}
+        annotations:
+          summary: "Scrape target {{ $labels.job }} is down"
+          description: "Prometheus cannot scrape {{ $labels.instance }} for 2m. Runbook: check container health (`docker compose -f docker-compose.prod.yml ps`), then the service /healthz from inside the network."
+
+      - alert: PendingInstrumentationTargetAbsent
+        # Info-level: reminds that these jobs are expected to be down until
+        # /metrics endpoints are added (Wave D D2 follow-up).
+        expr: up{instrumented="false"} == 0
+        for: 15m
+        labels: {severity: info, team: platform, instrumentation: pending}
+        annotations:
+          summary: "{{ $labels.job }} has no scrapeable /metrics (expected: pending instrumentation)"
+          description: "Service {{ $labels.job }} does not expose /metrics yet (Wave D D2). Verify the process is alive via /healthz; close this alert by adding prometheus instrumentation to the service."
+
+      - alert: RedpandaUnderReplicatedPartitions
+        expr: sum(redpanda_kafka_under_replicated_replicas) > 0
+        for: 5m
+        labels: {severity: critical, team: platform}
+        annotations:
+          summary: "Redpanda has under-replicated partitions"
+          description: "{{ $value }} partition replicas lagging. Runbook: `rpk cluster health` and `rpk cluster partitions list` on redpanda:9644; check broker restarts/disk before tax-season traffic."
+
+  # ---------------------------------------------------------- kafka / DLQ
+  - name: meridian.kafka
+    interval: 30s
+    rules:
+      # Implements the reminder in infra/kafka/provision-topics.sh:
+      # "alert on consumer lag > 50000 per group (SPEC B)".
+      # Offset-based lag (max offset - committed offset), works without the
+      # opt-in consumer_lag cluster gauges. To use the dedicated gauges instead:
+      #   rpk cluster config set enable_consumer_group_metrics '["group","partition","consumer_lag"]'
+      # then swap this expr for redpanda_kafka_consumer_group_lag_max.
+      - alert: KafkaConsumerLagHigh
+        expr: |
+          max by (redpanda_topic, redpanda_partition) (redpanda_kafka_max_offset)
+            - on (redpanda_topic, redpanda_partition) group_right
+          max by (redpanda_group, redpanda_topic, redpanda_partition) (redpanda_kafka_consumer_group_committed_offset)
+          > 50000
+        for: 10m
+        labels: {severity: warning, team: platform}
+        annotations:
+          summary: "Consumer group {{ $labels.redpanda_group }} lagging on {{ $labels.redpanda_topic }}[{{ $labels.redpanda_partition }}]"
+          description: "Lag {{ $value }} > 50k for 10m (SPEC B threshold). Runbook: scale consumer pods (HPA/KEDA lag scaler in infra/helm), check handler errors in service logs, verify no poison-pill loop re-publishing to {{ $labels.redpanda_topic }}.dlq."
+
+      # DLQ depth: *.dlq topics have no consumer group, so depth = high-watermark.
+      - alert: KafkaDlqDepthWarning
+        expr: |
+          sum by (redpanda_topic) (
+            max by (redpanda_topic, redpanda_partition) (redpanda_kafka_max_offset{redpanda_topic=~".+\\.dlq"})
+          ) > 0
+        for: 5m
+        labels: {severity: warning, team: platform}
+        annotations:
+          summary: "Events landing in {{ $labels.redpanda_topic }}"
+          description: "{{ $value }} dead-lettered events in {{ $labels.redpanda_topic }} (packages/events/bus routes handler failures to <topic>.dlq, SPEC 1.2). Runbook: inspect failing handler logs, replay after fix, then tombstone/trim the DLQ topic."
+
+      - alert: KafkaDlqDepthCritical
+        expr: |
+          sum by (redpanda_topic) (
+            max by (redpanda_topic, redpanda_partition) (redpanda_kafka_max_offset{redpanda_topic=~".+\\.dlq"})
+          ) > 50
+        for: 5m
+        labels: {severity: critical, team: platform}
+        annotations:
+          summary: "DLQ {{ $labels.redpanda_topic }} depth {{ $value }} > 50"
+          description: "Sustained dead-lettering indicates a systemic handler failure or schema break. Runbook: halt the producing consumer, diff envelope schema vs packages/events/schemas, replay from outbox (docs/ingestion.md) after fix."
+
+  # ---------------------------------------------------------- gateway
+  - name: meridian.gateway
+    interval: 30s
+    rules:
+      - alert: ApisixHigh5xxRate
+        expr: |
+          sum(rate(apisix_http_status{code=~"5.."}[5m]))
+            /
+          sum(rate(apisix_http_status[5m]))
+          > 0.001
+        for: 5m
+        labels: {severity: critical, team: platform}
+        annotations:
+          summary: "APISIX 5xx ratio {{ $value | humanizePercentage }} over 5m"
+          description: "Breaches the tax-season sign-off gate (no 5xx > 0.1%, docs/scale.md). Runbook: correlate with route label, check api-breaker state and upstream service /healthz, verify limit-req shedding order (infra/LOADSHEDDING.md)."
+
+      - alert: ApisixHighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(apisix_http_latency{type="request"}[5m]))
+          ) > 2000
+        for: 10m
+        labels: {severity: warning, team: platform}
+        annotations:
+          summary: "APISIX p95 request latency > 2s"
+          description: "Runbook: check upstream latency panel in Grafana Platform Overview, Redis/Postgres saturation, and whether sheddable batch/search load is crowding critical routes (infra/LOADSHEDDING.md)."
+
+  # ---------------------------------------------------------- temporal
+  - name: meridian.temporal
+    interval: 30s
+    rules:
+      # PENDING: temporal server metrics endpoint not enabled in compose
+      # (see temporal job comment in prometheus.yml). Metric names follow the
+      # tally prometheus exporter (counters gain _total).
+      - alert: TemporalServiceErrors
+        expr: sum(rate(service_errors_total[5m])) > 1
+        for: 10m
+        labels: {severity: warning, team: platform, instrumentation: pending}
+        annotations:
+          summary: "Temporal service error rate elevated"
+          description: "PENDING INSTRUMENTATION — enable metrics.prometheus.listenAddress on the temporal container before this rule can fire. Then: check workflow failures in temporal-ui (:8088), inspect worker logs for the affected namespace/task-queue."
+
+  # ---------------------------------------------------------- compliance / STR
+  # PENDING INSTRUMENTATION (Wave D D2): no service emits these metrics today
+  # and no STR filing service exists yet. Rules are the contract for the
+  # instrumentation work; they cannot fire until the metrics land.
+  - name: meridian.compliance
+    interval: 30s
+    rules:
+      - alert: StrDlqDepthWarning
+        expr: str_dlq_depth > 0
+        for: 5m
+        labels: {severity: warning, team: compliance, instrumentation: pending}
+        annotations:
+          summary: "STR DLQ non-empty"
+          description: "PENDING INSTRUMENTATION — requires an str-filing service emitting str_dlq_depth (gauge of dead-lettered filings). Until then, KafkaDlqDepth* covers any future str.*.dlq topics via the .+\\.dlq matcher."
+
+      - alert: StrDlqDepthCritical
+        expr: str_dlq_depth > 50
+        for: 5m
+        labels: {severity: critical, team: compliance, instrumentation: pending}
+        annotations:
+          summary: "STR DLQ depth {{ $value }} > 50"
+          description: "PENDING INSTRUMENTATION. When live: page compliance on-call; regulator deadlines (NFIU STR filing) may be at risk. Replay after root-cause fix."
+
+      - alert: StrSubmissionErrorsHigh
+        expr: rate(str_submission_errors_total[15m]) > 0
+        for: 10m
+        labels: {severity: warning, team: compliance, instrumentation: pending}
+        annotations:
+          summary: "STR submission errors occurring"
+          description: "PENDING INSTRUMENTATION. When live: check filing service connectivity to the regulator endpoint and credential expiry."
+
+      - alert: ConsumerErrorsHigh
+        expr: rate(consumer_errors_total[10m]) > 1
+        for: 10m
+        labels: {severity: warning, team: platform, instrumentation: pending}
+        annotations:
+          summary: "Consumer error rate elevated on {{ $labels.service }}"
+          description: "PENDING INSTRUMENTATION — emit consumer_errors_total from the Kafka consumers (packages/events pandaproxy handler-error path, ml/pipelines consumers). Interim signal: KafkaConsumerLagHigh + KafkaDlqDepth*."
+
+      # TigerBeetle exposes no metrics endpoint (consensus is internal to the
+      # cluster). Availability must be probed through the ledger's readyz
+      # dependency check. Until ledger exposes /metrics, this stays pending.
+      - alert: TigerBeetleUnavailable
+        expr: tigerbeetle_up == 0
+        for: 2m
+        labels: {severity: critical, team: platform, instrumentation: pending}
+        annotations:
+          summary: "TigerBeetle cluster unavailable"
+          description: "PENDING INSTRUMENTATION — no TB metrics endpoint exists; add a probe (ledger /readyz dependency or exec health per D3 runbook step 4). When live: check TB replicas on :3000, quorum in TB logs, then ledger pending-transfer backlog."
