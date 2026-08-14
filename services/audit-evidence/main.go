@@ -86,9 +86,15 @@ func (s *server) appendEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, _ := auth.FromContext(r.Context())
-	if req.Actor == "" {
-		req.Actor = claims.Sub
+	// Assurance hardening (MEDIUM, w2 §6A): the event Actor MUST be the
+	// validated JWT principal. A caller-supplied actor that does not match
+	// the token subject is an attribution-forgery attempt → 403.
+	if req.Actor != "" && req.Actor != claims.Sub {
+		httpx.Errorf(w, http.StatusForbidden, "forbidden",
+			"actor %q does not match authenticated principal %q", req.Actor, claims.Sub)
+		return
 	}
+	req.Actor = claims.Sub
 	typ := req.Type
 	if typ == "" {
 		typ = "audit.generic"
@@ -110,16 +116,26 @@ func (s *server) appendEvent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) queryEvents(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.FromContext(r.Context())
+	// Assurance hardening (MEDIUM, w2 §6A): audit reads are tenant-scoped —
+	// the caller only ever sees events belonging to the token's tenant.
+	if !ok || claims.TenantID == "" {
+		httpx.Errorf(w, http.StatusForbidden, "forbidden", "tenant-scoped token required")
+		return
+	}
 	q := r.URL.Query()
 	events, err := s.al.Query(q.Get("subject"), q.Get("type"), q.Get("from"), q.Get("to"))
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
 	}
-	if events == nil {
-		events = []evidence.AuditEvent{}
+	scoped := make([]evidence.AuditEvent, 0, len(events))
+	for _, e := range events {
+		if e.TenantID == claims.TenantID {
+			scoped = append(scoped, e)
+		}
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"events": events, "count": len(events)})
+	httpx.JSON(w, http.StatusOK, map[string]any{"events": scoped, "count": len(scoped)})
 }
 
 func (s *server) verifyChain(w http.ResponseWriter, r *http.Request) {
