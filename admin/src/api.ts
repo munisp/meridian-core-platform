@@ -19,6 +19,22 @@ api.defaults.adapter = ((config: any) =>
 const TOKEN_KEY = 'meridian.admin.token'
 const USER_KEY = 'meridian.admin.user'
 
+// errMsg extracts a human-readable message from a failed api call
+// (RFC7807 detail -> axios message -> fallback). Used by page error banners
+// (F-13: API failures must surface, not masquerade as empty states).
+export function errMsg(e: unknown): string {
+  if (axios.isAxiosError(e)) {
+    const d = e.response?.data
+    if (d && typeof d === 'object') {
+      const detail = (d as { detail?: unknown; title?: unknown }).detail ?? (d as { title?: unknown }).title
+      if (typeof detail === 'string' && detail) return `${e.response?.status ?? ''} ${detail}`.trim()
+    }
+    if (e.response) return `HTTP ${e.response.status}`
+    return e.message
+  }
+  return e instanceof Error ? e.message : String(e)
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }

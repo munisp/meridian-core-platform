@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../api'
+import { api, errMsg } from '../api'
 import { PackSummary } from '../types'
-import { Badge, DevSeedTag, Modal, PageHeader } from '../components'
+import { Badge, DevSeedTag, ErrorBanner, Modal, PageHeader } from '../components'
 
 interface PackDetail {
   summary: PackSummary
@@ -19,13 +19,15 @@ export default function RulePacks() {
   const [stale, setStale] = useState<string[]>([])
   const [detail, setDetail] = useState<PackDetail | null>(null)
   const [msg, setMsg] = useState('')
+  const [loadErr, setLoadErr] = useState('')
 
   function load() {
+    setLoadErr('')
     api.get('/v1/admin/packs').then((r) => {
       setPacks(r.data.packs || [])
       setSource(r.data.source)
       setStale(r.data.stale_consumers || [])
-    }).catch(() => {})
+    }).catch((e) => setLoadErr(errMsg(e)))
   }
   useEffect(load, [])
 
@@ -52,6 +54,7 @@ export default function RulePacks() {
         sub={t('rulePacks.sub')}
         actions={<DevSeedTag source={source} />}
       />
+      {loadErr && <ErrorBanner message={loadErr} onRetry={load} />}
       {msg && <div role="status" className="mb-4 rounded-lg bg-success border border-brand-200 px-4 py-2.5 text-sm text-success-on">{msg}</div>}
       {stale.length > 0 && (
         <div role="alert" className="mb-4 rounded-lg bg-warning border border-warning-strong px-4 py-2.5 text-sm text-warning-on">

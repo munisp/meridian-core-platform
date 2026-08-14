@@ -10,7 +10,9 @@ import os
 import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from meridian_events.auth import Claims, fastapi_dependency
@@ -236,11 +238,26 @@ def _emit_revenue_events(run_id: str, req: ReconRunRequest, matched: set[str]) -
     return n
 
 
+def _page(docs: list, limit: int, offset: int) -> tuple[list, int]:
+    """F-10: bounded list responses — newest-first window of at most
+    MAX_PAGE_LIMIT docs plus the pre-pagination total."""
+    total = len(docs)
+    return list(reversed(docs))[offset:offset + limit], total
+
+
+# F-10: pagination bounds for list endpoints (default 50, hard max 500).
+PageLimit = Annotated[int, Query(ge=1, le=500)]
+PageOffset = Annotated[int, Query(ge=0)]
+
+
 @app.get("/v1/revenue/events")
-def revenue_events(limit: int = 200,
+def revenue_events(limit: PageLimit = 50,
+                   offset: PageOffset = 0,
                    claims: Claims = Depends(fastapi_dependency())) -> dict:
     docs = _store.list("revenue_events")
-    return {"events": docs[-limit:], "count": len(docs)}
+    page, total = _page(docs, limit, offset)
+    return {"events": page, "count": len(page), "total": total,
+            "limit": limit, "offset": offset}
 
 
 @app.get("/v1/revenue/aggregate")
@@ -372,11 +389,15 @@ def refund_sweep(claims: Claims = Depends(fastapi_dependency({"operator", "admin
 
 @app.get("/v1/recon/breaks")
 def list_breaks(status: str | None = None,
+                limit: PageLimit = 50,
+                offset: PageOffset = 0,
                 claims: Claims = Depends(fastapi_dependency())) -> dict:
     breaks = _store.list("breaks")
     if status:
         breaks = [b for b in breaks if b.get("status") == status]
-    return {"breaks": breaks, "count": len(breaks)}
+    page, total = _page(breaks, limit, offset)
+    return {"breaks": page, "count": len(page), "total": total,
+            "limit": limit, "offset": offset}
 
 
 class ResolveRequest(BaseModel):
@@ -544,11 +565,15 @@ def ingest_records(req: IngestRequest, claims: Claims = Depends(fastapi_dependen
 
 @app.get("/v1/recon/investigations")
 def list_investigations(status: str | None = None,
+                        limit: PageLimit = 50,
+                        offset: PageOffset = 0,
                         claims: Claims = Depends(fastapi_dependency())) -> dict:
     cases = _store.list("investigation_cases")
     if status:
         cases = [c for c in cases if c.get("status") == status]
-    return {"cases": cases, "count": len(cases)}
+    page, total = _page(cases, limit, offset)
+    return {"cases": page, "count": len(page), "total": total,
+            "limit": limit, "offset": offset}
 
 
 def main() -> None:  # pragma: no cover

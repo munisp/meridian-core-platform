@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, fmtTime } from '../api'
+import { api, errMsg, fmtTime } from '../api'
 import { AuditEvent, Overview, ServiceEntry } from '../types'
-import { DevSeedTag, HealthBadge, PageHeader, SkeletonRows, StatCard } from '../components'
+import { DevSeedTag, ErrorBanner, HealthBadge, PageHeader, SkeletonRows, StatCard } from '../components'
 
 export default function Dashboard() {
   const { t } = useTranslation('pages')
@@ -12,15 +12,22 @@ export default function Dashboard() {
   const [auditSource, setAuditSource] = useState('')
   const [svcLoaded, setSvcLoaded] = useState(false)
   const [evLoaded, setEvLoaded] = useState(false)
+  const [ovErr, setOvErr] = useState('')
+  const [svcErr, setSvcErr] = useState('')
+  const [evErr, setEvErr] = useState('')
 
-  useEffect(() => {
-    api.get('/v1/admin/overview').then((r) => setOv(r.data)).catch(() => {})
-    api.get('/v1/admin/services').then((r) => setServices(r.data.services || [])).catch(() => {}).finally(() => setSvcLoaded(true))
+  function load() {
+    setOvErr('')
+    setSvcErr('')
+    setEvErr('')
+    api.get('/v1/admin/overview').then((r) => setOv(r.data)).catch((e) => setOvErr(errMsg(e)))
+    api.get('/v1/admin/services').then((r) => setServices(r.data.services || [])).catch((e) => setSvcErr(errMsg(e))).finally(() => setSvcLoaded(true))
     api.get('/v1/admin/audit/events').then((r) => {
       setEvents((r.data.events || []).slice(0, 8))
       setAuditSource(r.data.source)
-    }).catch(() => {}).finally(() => setEvLoaded(true))
-  }, [])
+    }).catch((e) => setEvErr(errMsg(e))).finally(() => setEvLoaded(true))
+  }
+  useEffect(load, [])
 
   const gateOpen = ov ? Object.values(ov.gates).filter(Boolean).length : 0
   const gateTotal = ov ? Object.keys(ov.gates).length : 0
@@ -28,6 +35,7 @@ export default function Dashboard() {
   return (
     <div>
       <PageHeader title={t('dashboard.title')} sub={t('dashboard.sub')} />
+      {ovErr && <ErrorBanner message={ovErr} onRetry={load} />}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
         <StatCard label={t('dashboard.servicesHealthy')} value={ov ? `${ov.services.healthy}/${ov.services.total}` : '—'} sub={t('dashboard.registeredServices')} />
         <StatCard label={t('dashboard.rulePacks')} value={ov?.packs.count ?? '—'} seed={ov?.packs.source === 'dev-seed'} />
@@ -55,6 +63,7 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
+            {svcErr && <ErrorBanner message={svcErr} onRetry={load} />}
             {!svcLoaded && <SkeletonRows rows={6} height="h-6" />}
             {svcLoaded && services.length === 0 && <div className="text-sm text-stone-600">{t('dashboard.noServices')}</div>}
           </div>
@@ -79,6 +88,7 @@ export default function Dashboard() {
                 <div className="text-xs text-stone-600 mt-0.5">{e.actor} · {e.subject}</div>
               </div>
             ))}
+            {evErr && <ErrorBanner message={evErr} onRetry={load} />}
             {!evLoaded && <SkeletonRows rows={5} height="h-10" />}
             {evLoaded && events.length === 0 && <div className="text-sm text-stone-600">{t('dashboard.noEvents')}</div>}
           </div>

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, fmtTime } from '../api'
+import { api, errMsg, fmtTime } from '../api'
 import { FlowDef, FlowReceipt } from '../types'
-import { Badge, DevSeedTag, PageHeader } from '../components'
+import { Badge, DevSeedTag, ErrorBanner, PageHeader } from '../components'
 
 export default function Flows() {
   const { t } = useTranslation('pages')
@@ -10,15 +10,21 @@ export default function Flows() {
   const [receipts, setReceipts] = useState<FlowReceipt[]>([])
   const [rcptSource, setRcptSource] = useState('')
   const [forbidden, setForbidden] = useState<{ status: string; sightings: FlowReceipt[] } | null>(null)
+  const [loadErr, setLoadErr] = useState('')
 
-  useEffect(() => {
-    api.get('/v1/admin/flows/matrix').then((r) => setFlows(r.data.flows || [])).catch(() => {})
+  function load() {
+    setLoadErr('')
+    const errs: string[] = []
+    api.get('/v1/admin/flows/matrix').then((r) => setFlows(r.data.flows || []))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
     api.get('/v1/admin/flows/receipts').then((r) => {
       setReceipts(r.data.receipts || [])
       setRcptSource(r.data.source)
-    }).catch(() => {})
-    api.get('/v1/admin/flows/forbidden').then((r) => setForbidden(r.data)).catch(() => {})
-  }, [])
+    }).catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
+    api.get('/v1/admin/flows/forbidden').then((r) => setForbidden(r.data))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
+  }
+  useEffect(load, [])
 
   return (
     <div>
@@ -26,6 +32,7 @@ export default function Flows() {
         title={t('flows.title')}
         sub={t('flows.sub')}
       />
+      {loadErr && <ErrorBanner message={loadErr} onRetry={load} />}
 
       <section className={`mb-8 rounded-xl border p-5 ${forbidden?.status === 'clean' ? 'bg-success border-brand-200' : 'bg-danger border-danger-strong'}`}>
         <div className="flex items-center justify-between">

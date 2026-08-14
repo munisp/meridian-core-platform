@@ -1,8 +1,8 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, fmtKobo, fmtTime } from '../api'
+import { api, errMsg, fmtKobo, fmtTime } from '../api'
 import { LedgerAccount, ReconBreak } from '../types'
-import { Badge, DevSeedTag, Modal, PageHeader } from '../components'
+import { Badge, DevSeedTag, ErrorBanner, Modal, PageHeader } from '../components'
 import Field from '../components/Field'
 import MoneyInput from '../components/MoneyInput'
 
@@ -22,13 +22,17 @@ export default function Ledger() {
   const [form, setForm] = useState({ debit_account_id: '', credit_account_id: '', ledger: 200 })
   const [amountKobo, setAmountKobo] = useState<number | null>(null)
   const [msg, setMsg] = useState('')
+  const [loadErr, setLoadErr] = useState('')
 
   function load() {
+    setLoadErr('')
+    const errs: string[] = []
     api.get('/v1/admin/ledger/accounts').then((r) => {
       setAccounts(r.data.accounts || [])
       setSource(r.data.source)
-    }).catch(() => {})
-    api.get('/v1/admin/ledger/recon-breaks').then((r) => setBreaks(r.data.breaks || [])).catch(() => {})
+    }).catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
+    api.get('/v1/admin/ledger/recon-breaks').then((r) => setBreaks(r.data.breaks || []))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
   }
   useEffect(load, [])
 
@@ -72,6 +76,7 @@ export default function Ledger() {
           </>
         }
       />
+      {loadErr && <ErrorBanner message={loadErr} onRetry={load} />}
       {msg && <div role="status" className="mb-4 rounded-lg bg-success border border-brand-200 px-4 py-2.5 text-sm text-success-on">{msg}</div>}
 
       <form onSubmit={doLookup} className="mb-6 flex gap-2 max-w-xl">
