@@ -57,6 +57,9 @@ services:
       - pgdata:/var/lib/postgresql/data
       # Idempotent per-service schema init (CREATE SCHEMA IF NOT EXISTS ...)
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      # Least-privilege roles (0003_roles.sql) — applied via pgmigrate /
+      # ops psql, mounted read-only for the backup sidecar & runbooks.
+      - ./postgres/migrations:/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -65,6 +68,32 @@ services:
     deploy:
       resources:
         limits: { cpus: "2.0", memory: 4G }
+
+  # ------------------------------------------------- Postgres backup sidecar
+  # F-12: daily pg_dump of all service DBs into a versioned MinIO bucket.
+  # No inline credentials: BACKUP_* come from .env.prod / vault.
+  pg-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command: ["/bin/sh", "/backup/cron-loop.sh"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      BACKUP_POSTGRES_USER: ${BACKUP_POSTGRES_USER:-${POSTGRES_USER}}
+      BACKUP_POSTGRES_PASSWORD: ${BACKUP_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}
+      BACKUP_DATABASES: ${BACKUP_DATABASES:-${POSTGRES_DB:-meridian}}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-meridian-pg-backups}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      BACKUP_HOUR_UTC: ${BACKUP_HOUR_UTC:-3}
+    volumes:
+      - ./backup:/backup:ro
+      - pg-backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
 
   # ---------------------------------------------------------------- Redis
   redis:
@@ -260,8 +289,12 @@ services:
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-meridian}
-      KC_DB_USERNAME: ${POSTGRES_USER}
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      # Privilege separation (assurance w2 §6A #1): per-service least-privilege
+      # role from infra/postgres/migrations/0003_roles.sql. Compat fallback:
+      # KEYCLOAK_DB_* unset → shared POSTGRES_* user (dev only; prod services
+      # refuse to boot on the shared user — see store.ResolveDatabaseURL).
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-${POSTGRES_USER}}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-${POSTGRES_PASSWORD}}
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
       # HTTPS hostname for prod issuer (H2/H5).
@@ -296,7 +329,8 @@ services:
     command: serve
     environment:
       PERMIFY_DATABASE_ENGINE: postgres
-      PERMIFY_DATABASE_URI: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-meridian}?sslmode=disable
+      # Privilege separation: svc_permify role (see keycloak note above).
+      PERMIFY_DATABASE_URI: postgres://${PERMIFY_DB_USER:-${POSTGRES_USER}}:${PERMIFY_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${POSTGRES_DB:-meridian}?sslmode=disable
       PERMIFY_DATABASE_MAX_OPEN_CONNECTIONS: "20"
     ports:
       - "3476:3476"   # REST
@@ -312,6 +346,70 @@ services:
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 1G }
+
+  # -------------------------------------------- Observability stack (D4/D2)
+  # Prometheus + Alertmanager + Grafana, configs from infra/observability.
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"   # restrict at firewall in prod
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 2G }
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"   # restrict at firewall in prod
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9093/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 256M }
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
 
   # ---------------------------------------------------------------- APISIX + etcd
   etcd:
@@ -404,6 +502,10 @@ services:
 
 volumes:
   pgdata: {}
+  pg-backups: {}
+  prometheus-data: {}
+  alertmanager-data: {}
+  grafana-data: {}
   redpanda-data: {}
   redis-data: {}
   opensearch-data: {}
