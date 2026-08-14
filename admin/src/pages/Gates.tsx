@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
-import { api, fmtTime } from '../api'
+import { api, errMsg, fmtTime } from '../api'
 import { Gate } from '../types'
-import { Badge, DevSeedTag, Modal, PageHeader } from '../components'
+import { Badge, DevSeedTag, ErrorBanner, Modal, PageHeader } from '../components'
 import Field from '../components/Field'
 
 interface GazetteRow { instrument: string; status: string; gate: string; checked_at: string }
@@ -15,13 +15,17 @@ export default function Gates() {
   const [target, setTarget] = useState<Gate | null>(null)
   const [reason, setReason] = useState('')
   const [err, setErr] = useState('')
+  const [loadErr, setLoadErr] = useState('')
 
   function load() {
+    setLoadErr('')
+    const errs: string[] = []
     api.get('/v1/admin/gates').then((r) => {
       setGates(r.data.gates || [])
       setSource(r.data.source)
-    }).catch(() => {})
-    api.get('/v1/admin/gazette-watch').then((r) => setGazette(r.data.watch || [])).catch(() => {})
+    }).catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
+    api.get('/v1/admin/gazette-watch').then((r) => setGazette(r.data.watch || []))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
   }
   useEffect(load, [])
 
@@ -45,6 +49,7 @@ export default function Gates() {
         sub={t('gates.sub')}
         actions={<DevSeedTag source={source} />}
       />
+      {loadErr && <ErrorBanner message={loadErr} onRetry={load} />}
       <div className="card overflow-x-auto mb-8">
         <table className="w-full">
           <thead>
