@@ -1,8 +1,8 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, fmtTime, sha256Hex } from '../api'
+import { api, errMsg, fmtTime, sha256Hex } from '../api'
 import { AuditEvent, EvidenceObject } from '../types'
-import { Badge, DevSeedTag, Modal, PageHeader } from '../components'
+import { Badge, DevSeedTag, ErrorBanner, Modal, PageHeader } from '../components'
 
 export default function Audit() {
   const { t } = useTranslation('pages')
@@ -15,6 +15,8 @@ export default function Audit() {
   const [verify, setVerify] = useState<'idle' | 'ok' | 'fail'>('idle')
   const [tatSubject, setTatSubject] = useState('')
   const [tat, setTat] = useState<AuditEvent[] | null>(null)
+  const [evErr, setEvErr] = useState('')
+  const [docsErr, setDocsErr] = useState('')
 
   function loadEvents() {
     const q = new URLSearchParams()
@@ -23,10 +25,11 @@ export default function Audit() {
     api.get('/v1/admin/audit/events?' + q.toString()).then((r) => {
       setEvents(r.data.events || [])
       setEvSource(r.data.source)
-    }).catch(() => {})
+    }).catch((e) => setEvErr(errMsg(e)))
   }
   function loadEvidence() {
-    api.get('/v1/admin/evidence').then((r) => setEvidence(r.data.evidence || [])).catch(() => {})
+    setDocsErr('')
+    api.get('/v1/admin/evidence').then((r) => setEvidence(r.data.evidence || [])).catch((e) => setDocsErr(errMsg(e)))
   }
   useEffect(() => { loadEvents(); loadEvidence() }, [])
 
@@ -59,6 +62,8 @@ export default function Audit() {
         sub={t('audit.sub')}
         actions={<DevSeedTag source={evSource} />}
       />
+      {evErr && <ErrorBanner message={evErr} onRetry={loadEvents} />}
+      {docsErr && <ErrorBanner message={docsErr} onRetry={loadEvidence} />}
 
       <div className="grid lg:grid-cols-5 gap-6">
         <section className="lg:col-span-3">

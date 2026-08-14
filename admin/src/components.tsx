@@ -49,6 +49,17 @@ export function HealthBadge({ status }: { status: string }) {
   return <Badge tone={tone}>{status}</Badge>
 }
 
+/** F-13: visible API failure state with retry — replaces silent empty states. */
+export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <div role="alert" className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-danger-strong bg-danger px-4 py-3 text-sm text-danger-strong">
+      <span className="min-w-0 break-words">{t('common.loadFailed', { defaultValue: 'Failed to load data' })}: {message}</span>
+      {onRetry && <button type="button" className="btn-secondary text-xs shrink-0" onClick={onRetry}>{t('common.retry', { defaultValue: 'Retry' })}</button>}
+    </div>
+  )
+}
+
 export function DevSeedTag({ source }: { source?: string }) {
   if (!source || source === 'live' || source === 'local' || source === 'catalog' || source === 'static-catalog') return null
   return <Badge tone="amber">dev seed</Badge>

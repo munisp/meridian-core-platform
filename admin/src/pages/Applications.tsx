@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../api'
+import { api, errMsg } from '../api'
 import { ServiceEntry } from '../types'
-import { Badge, HealthBadge, PageHeader } from '../components'
+import { Badge, ErrorBanner, HealthBadge, PageHeader } from '../components'
 
 const PLANES = ['core', 'compliance', 'inclusion', 'gov'] as const
 
@@ -10,9 +10,11 @@ export default function Applications() {
   const { t } = useTranslation('pages')
   const [services, setServices] = useState<ServiceEntry[]>([])
   const [busy, setBusy] = useState('')
+  const [loadErr, setLoadErr] = useState('')
 
   function load() {
-    api.get('/v1/admin/services').then((r) => setServices(r.data.services || [])).catch(() => {})
+    setLoadErr('')
+    api.get('/v1/admin/services').then((r) => setServices(r.data.services || [])).catch((e) => setLoadErr(errMsg(e)))
   }
   useEffect(load, [])
 
@@ -33,6 +35,7 @@ export default function Applications() {
         sub={t('applications.sub')}
         actions={<button className="btn-secondary" onClick={load}>{t('applications.refreshHealth')}</button>}
       />
+      {loadErr && <ErrorBanner message={loadErr} onRetry={load} />}
       {PLANES.map((plane) => {
         const rows = services.filter((s) => s.plane === plane)
         if (rows.length === 0) return null
