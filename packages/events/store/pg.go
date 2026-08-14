@@ -209,22 +209,27 @@ func (s *PgStore) Update(coll, id string, v any, fn func(current any) (any, erro
 	return tx.Commit(ctx)
 }
 
-// OpenFromEnv selects the store per HARDENING H1: DATABASE_URL set ->
-// Postgres (profile=prod); otherwise the embedded JSON store at dir.
-// Startup never fails because DATABASE_URL is unset; a Postgres connection
-// failure falls back to the embedded store with a dev-profile log line.
+// OpenFromEnv selects the store per HARDENING H1, failing closed:
+//
+//   - DATABASE_URL set -> Postgres is REQUIRED; a connection failure is a
+//     startup error, never a silent fallback to the embedded store (an
+//     explicitly-configured Postgres that is unreachable must not strand
+//     consent/audit writes in ephemeral per-pod files).
+//   - DATABASE_URL unset -> the embedded JSON store is allowed only outside
+//     prod; PROFILE=prod refuses to boot without DATABASE_URL.
 func OpenFromEnv(dir string) (DocStore, error) {
 	if url := os.Getenv("DATABASE_URL"); url != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		pg, err := OpenPg(ctx, url)
 		if err != nil {
-			log.Printf("profile=dev component=store postgres unavailable (%v); embedded fallback", err)
-		} else {
-			log.Printf("profile=prod component=store postgres")
-			return pg, nil
+			return nil, fmt.Errorf("DATABASE_URL is set but Postgres is unreachable (%v); refusing embedded fallback", err)
 		}
-		return Open(dir)
+		log.Printf("profile=prod component=store postgres")
+		return pg, nil
+	}
+	if os.Getenv("PROFILE") == "prod" {
+		return nil, fmt.Errorf("PROFILE=prod requires DATABASE_URL; refusing the embedded store")
 	}
 	log.Printf("profile=dev component=store embedded dir=%q", dir)
 	return Open(dir)
