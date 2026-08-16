@@ -57,8 +57,12 @@ func NotFound(w http.ResponseWriter, format string, args ...any) {
 func Conflict(w http.ResponseWriter, format string, args ...any) {
 	Errorf(w, http.StatusConflict, "conflict", format, args...)
 }
+// Internal never echoes internal error detail to the client (assurance R4):
+// the detail is logged server-side and the response body carries only the
+// generic "internal error" title.
 func Internal(w http.ResponseWriter, format string, args ...any) {
-	Errorf(w, http.StatusInternalServerError, "internal_error", format, args...)
+	log.Printf("internal_error: %s", fmt.Sprintf(format, args...))
+	Errorf(w, http.StatusInternalServerError, "internal_error", "internal error")
 }
 
 // Decode reads a JSON request body into v, rejecting unknown fields loosely.
