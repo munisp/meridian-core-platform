@@ -153,7 +153,9 @@ func main() {
 	port := envOr("PORT", "8095")
 	log.Printf("admin-api %s listening on :%s (AUTH_MODE=%s)", version, port, a.authMode)
 	// F-5: graceful shutdown on SIGTERM/SIGINT + full server timeouts.
-	log.Fatal(httpx.ListenAndServe(":"+port, withCORS(mux)))
+	httpx.InitMetrics("admin-api", version)
+	httpx.StartMetricsServer()
+	log.Fatal(httpx.ListenAndServe(":"+port, withCORS(httpx.Instrument(mux))))
 }
 
 func (a *app) handleHealthz(w http.ResponseWriter, r *http.Request) {

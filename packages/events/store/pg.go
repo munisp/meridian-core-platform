@@ -135,6 +135,27 @@ func (s *PgStore) Put(coll, id string, v any) error {
 	return err
 }
 
+// PutIfAbsent inserts a document only when the id is unused (ON CONFLICT DO
+// NOTHING), reporting whether the insert happened. Insert-only: works under
+// append-only roles such as svc_audit_evidence (r9 pentest defect: the
+// upsert in Put requires UPDATE, which the audit schema denies, 500ing every
+// evidence write in prod).
+func (s *PgStore) PutIfAbsent(coll, id string, v any) (bool, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return false, err
+	}
+	ct, err := s.pool.Exec(context.Background(),
+		`INSERT INTO meridian_documents (collection, id, doc, updated_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (collection, id) DO NOTHING`,
+		coll, id, b)
+	if err != nil {
+		return false, err
+	}
+	return ct.RowsAffected() == 1, nil
+}
+
 // Get loads a document by id.
 func (s *PgStore) Get(coll, id string, v any) error {
 	raw, err := s.GetRaw(coll, id)

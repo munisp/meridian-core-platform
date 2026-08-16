@@ -147,7 +147,9 @@ func main() {
 
 	addr := ":" + httpx.Port("8007")
 	log.Printf("%s %s", service, version)
-	log.Fatal(httpx.ListenAndServe(addr, auth.Middleware(mux)))
+	httpx.InitMetrics(service, version)
+	httpx.StartMetricsServer()
+	log.Fatal(httpx.ListenAndServe(addr, auth.Middleware(httpx.Instrument(mux))))
 }
 
 type createReq struct {

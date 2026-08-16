@@ -133,7 +133,9 @@ func main() {
 		go srv.runPendingSweeper(ctx)
 	}
 
-	handler := auth.Middleware(srv.routes())
+	httpx.InitMetrics(service, version)
+	httpx.StartMetricsServer()
+	handler := auth.Middleware(httpx.Instrument(srv.routes()))
 	addr := ":" + httpx.Port("8010")
 	log.Printf("%s %s (DATA_DIR=%s, EVENT_BUS=%s)", service, version, dir, httpx.Env("EVENT_BUS", "inproc"))
 	log.Fatal(httpx.ListenAndServe(addr, handler))

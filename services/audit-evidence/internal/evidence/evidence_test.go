@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -167,5 +168,60 @@ func TestAssembleTAT(t *testing.T) {
 	}
 	if len(tat.EvidenceRefs) != 1 || tat.EvidenceRefs[0] != obj.ID {
 		t.Fatalf("evidence refs: %+v", tat.EvidenceRefs)
+	}
+}
+
+// insertOnlyStore simulates the prod append-only audit role: Put (upsert) is
+// denied, PutIfAbsent (INSERT ... ON CONFLICT DO NOTHING) is allowed.
+type insertOnlyStore struct {
+	base *store.Store
+}
+
+func (s insertOnlyStore) Put(coll, id string, v any) error {
+	return fmt.Errorf("permission denied for table meridian_documents (SQLSTATE 42501)")
+}
+
+// PutIfAbsent mirrors the PG INSERT ... ON CONFLICT DO NOTHING path: allowed
+// under the append-only role.
+func (s insertOnlyStore) PutIfAbsent(coll, id string, v any) (bool, error) {
+	return s.base.PutIfAbsent(coll, id, v)
+}
+
+func (s insertOnlyStore) Get(coll, id string, v any) error { return s.base.Get(coll, id, v) }
+func (s insertOnlyStore) GetRaw(coll, id string) (json.RawMessage, error) {
+	return s.base.GetRaw(coll, id)
+}
+func (s insertOnlyStore) Delete(coll, id string) error { return s.base.Delete(coll, id) }
+func (s insertOnlyStore) List(coll string) ([]json.RawMessage, error) {
+	return s.base.List(coll)
+}
+func (s insertOnlyStore) ListInto(coll string, slicePtr any) error {
+	return s.base.ListInto(coll, slicePtr)
+}
+func (s insertOnlyStore) Update(coll, id string, v any, fn func(current any) (any, error)) error {
+	return s.base.Update(coll, id, v, fn)
+}
+
+// TestWormPutInsertOnlyRole is the r9 pentest regression: evidence writes
+// must succeed under an append-only DB role (no UPDATE privilege).
+func TestWormPutInsertOnlyRole(t *testing.T) {
+	dir := t.TempDir()
+	base, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := NewWormStore(dir, insertOnlyStore{base: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, err := ws.Put("idem-1", []byte("payload-one"), "text/plain", nil)
+	if err != nil {
+		t.Fatalf("insert-only Put must succeed: %v", err)
+	}
+	if _, err := ws.Put("idem-1", []byte("payload-two"), "text/plain", nil); err != ErrImmutable() {
+		t.Fatalf("reuse of id with different payload must be rejected: %v", err)
+	}
+	if _, err := ws.Get(obj.ID); err != nil {
+		t.Fatal(err)
 	}
 }

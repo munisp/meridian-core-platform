@@ -46,6 +46,16 @@ groups:
           summary: "{{ $labels.job }} has no scrapeable /metrics (expected: pending instrumentation)"
           description: "Service {{ $labels.job }} does not expose /metrics yet (Wave D D2). Verify the process is alive via /healthz; close this alert by adding prometheus instrumentation to the service."
 
+      - alert: HttpErrorRateHigh
+        # LIVE since r9: meridian_http_requests_total is emitted by every
+        # instrumented Go service (httpx metrics.go, METRICS_PORT listener).
+        expr: sum by (job) (rate(meridian_http_requests_total{status=~"5.."}[5m])) > 0.5
+        for: 10m
+        labels: {severity: warning, team: platform}
+        annotations:
+          summary: "{{ $labels.job }} 5xx rate elevated"
+          description: "5xx responses > 0.5/s for 10m on {{ $labels.job }}. Scrape source: METRICS_PORT listener (meridian_http_requests_total). Runbook: check service logs for internal_error lines, then downstream deps (postgres, permify, tigerbeetle)."
+
       - alert: RedpandaUnderReplicatedPartitions
         expr: sum(redpanda_kafka_under_replicated_replicas) > 0
         for: 5m
