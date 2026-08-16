@@ -50,18 +50,24 @@ Infrastructure for real workers **already exists**: `temporalio/auto-setup`
   inproc fallback still works with `TEMPORAL_URL` unset, (b) failed workflow
   input surfaces as `failed`, not silent `completed`.
 
-### workflows-go (follow-up)
+### workflows-go (done — fix/assurance-r8)
 
-- Add a `cmd/workflow-worker` main: `NewRunnerFromEnv`, register all
-  `WFGateFlip`/`WFPackRollout`/`Compose`-built workflows with injected
-  plane clients, `Start`, block on signal. Deploy via the existing helm
-  `temporalWorker` workload (image becomes the worker binary, not
-  `temporalio/auto-setup`).
+- Added `workflows-go/cmd/workflow-worker`: `sdkx.NewRunnerFromEnv`,
+  registers `wf-gate-flip` / `wf-pack-rollout` (plane clients are HTTP
+  calls to `GATE_PLANE_URL` / `PACK_PLANE_URL`; an unconfigured endpoint
+  fails the run honestly) plus `wf-noop`, blocks on signal. Deploy via the
+  existing helm `temporalWorker` workload (image becomes the worker
+  binary, not `temporalio/auto-setup`).
 
-### money workflows (follow-up)
+### money workflows (done — fix/assurance-r8)
 
-- Wire `money.NewRunnerFromEnv()` into the settlement/ledger plane binary
-  that owns money movement; today nothing calls it outside tests.
+- `services/ledger` now calls `money.NewRunnerFromEnv()` at boot
+  (fail-closed when `TEMPORAL_URL` is set) and registers the money sagas
+  via `money.Register` with a `tbMoneyAdapter` over the service's
+  `tb.LedgerClient` (`money_workflows.go`). Deterministic ids make
+  activity retries replay idempotently; covered by
+  `money_workflows_test.go` (capture happy-path, replay idempotency,
+  honest failure on unknown account).
 
 ### Python services (deferred)
 
