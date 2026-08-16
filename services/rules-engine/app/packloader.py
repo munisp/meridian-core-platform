@@ -66,11 +66,30 @@ def _verify_ed25519(sig_hex: str, msg: bytes, pub_hex: str) -> bool:
         return False
 
 
+# Anchor default paths to the service directory (this file lives at
+# services/rules-engine/app/packloader.py) so pack/lock/keys resolution is
+# independent of the process working directory (e.g. pytest run from the
+# repo root must resolve the same paths as one run from the service dir).
+# The repo-root rule-packs/ lockfile intentionally is NOT a default
+# candidate: it pins the canonical consumer packs, and enforcing it against
+# the unsigned dev seed packs in services/rules-engine/packs would reject
+# them. Consumers of the canonical packs pass lock_path/signing_keys_path
+# explicitly (see tests/test_vat_packs.py).
+_SERVICE_DIR = Path(__file__).resolve().parents[1]
+
+
+def _resolve_under_service(path: str) -> Path:
+    """Relative paths are interpreted against the service directory, not cwd."""
+    p = Path(path)
+    return p if p.is_absolute() else _SERVICE_DIR / p
+
+
 class PackLoader:
     def __init__(self, packs_dir: str | None = None, registry_url: str | None = None,
                  lock_path: str | None = None, signing_keys_path: str | None = None,
                  enforce: bool | None = None) -> None:
-        self.packs_dir = Path(packs_dir or os.environ.get("PACKS_DIR", "packs"))
+        self.packs_dir = _resolve_under_service(
+            packs_dir or os.environ.get("PACKS_DIR", "packs"))
         self.registry_url = (registry_url or os.environ.get("RP_REGISTRY_URL", "")).rstrip("/")
         self._lock = threading.RLock()
         self._cache: dict[str, dict] = {}
@@ -80,7 +99,6 @@ class PackLoader:
         candidates = [lock_env] if lock_env else [
             str(self.packs_dir / "packs.lock.json"),
             str(self.packs_dir.parent / "packs.lock.json"),
-            str(self.packs_dir.parent.parent / "rule-packs" / "packs.lock.json"),
         ]
         self._pins: dict[str, dict] = {}
         for c in candidates:
@@ -90,7 +108,6 @@ class PackLoader:
         key_candidates = [keys_env] if keys_env else [
             str(self.packs_dir / "signing_keys.json"),
             str(self.packs_dir.parent / "signing_keys.json"),
-            str(self.packs_dir.parent.parent / "rule-packs" / "signing_keys.json"),
         ]
         self._signing_keys: dict[str, dict] = {}
         for c in key_candidates:

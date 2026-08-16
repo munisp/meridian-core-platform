@@ -466,11 +466,10 @@ func (s *server) postPending(w http.ResponseWriter, r *http.Request) {
 	}
 	var req postReq
 	_ = httpx.Decode(r, &req) // empty body allowed
-	code := req.Code
-	if code == 0 {
-		code = tb.CodeCapture
-	}
-	res, err := s.client.PostPending(id, req.AmountKobo, code)
+	// TigerBeetle requires a post/void to reuse the pending transfer's own
+	// code; req.Code stays 0 unless the caller asserts a specific code, and
+	// the ledger client rejects a mismatch (PENDING_TRANSFER_HAS_DIFFERENT_CODE).
+	res, err := s.client.PostPending(id, req.AmountKobo, req.Code)
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
@@ -484,7 +483,8 @@ func (s *server) voidPending(w http.ResponseWriter, r *http.Request) {
 		httpx.BadRequest(w, "%v", err)
 		return
 	}
-	res, err := s.client.VoidPending(id, tb.CodeVoid)
+	// code=0: the client reuses the pending transfer's code (TB rule).
+	res, err := s.client.VoidPending(id, 0)
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
