@@ -115,7 +115,7 @@ func TestPendingLifecycle(t *testing.T) {
 		t.Fatalf("want exceeds_credits on pending, got %s", r.Code)
 	}
 	// partial post: 3000 of 4000
-	if r, _ := c.PostPending(pend.ID, 3_000, CodeCapture); r.Code != OK {
+	if r, _ := c.PostPending(pend.ID, 3_000, 0); r.Code != OK {
 		t.Fatalf("post: %s", r.Code)
 	}
 	bal, _, _ = c.Balance(src)
@@ -127,11 +127,11 @@ func TestPendingLifecycle(t *testing.T) {
 		t.Fatalf("dst credits: %+v", bal)
 	}
 	// double post rejected
-	if r, _ := c.PostPending(pend.ID, 0, CodeCapture); r.Code == OK {
+	if r, _ := c.PostPending(pend.ID, 0, 0); r.Code == OK {
 		t.Fatal("double post accepted")
 	}
 	// void unknown
-	if r, _ := c.VoidPending(MakeID(0, 77), CodeVoid); r.Code != PendingTransferNotFound {
+	if r, _ := c.VoidPending(MakeID(0, 77), 0); r.Code != PendingTransferNotFound {
 		t.Fatalf("void unknown: %s", r.Code)
 	}
 }
@@ -146,14 +146,14 @@ func TestVoidReleasesReservation(t *testing.T) {
 	if r, _ := c.PendingTransfer(p); r.Code != OK {
 		t.Fatal(r.Code)
 	}
-	if r, _ := c.VoidPending(p.ID, CodeVoid); r.Code != OK {
+	if r, _ := c.VoidPending(p.ID, 0); r.Code != OK {
 		t.Fatalf("void: %s", r.Code)
 	}
 	bal, _, _ := c.Balance(a)
 	if bal.DebitsPending != 0 || bal.AvailableKobo != 500 {
 		t.Fatalf("void release: %+v", bal)
 	}
-	if r, _ := c.VoidPending(p.ID, CodeVoid); r.Code == OK {
+	if r, _ := c.VoidPending(p.ID, 0); r.Code == OK {
 		t.Fatal("double void accepted")
 	}
 }

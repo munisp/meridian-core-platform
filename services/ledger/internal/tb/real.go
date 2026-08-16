@@ -246,44 +246,50 @@ func (c *RealClient) PendingTransfer(t Transfer) (Result, error) {
 	return c.createOne(transferToTB(t, true))
 }
 
-// PostPending captures a pending transfer (code 2 = post_pending).
+// PostPending captures a pending transfer (post_pending_transfer).
+// TigerBeetle requires the post to carry the SAME code as the pending
+// transfer (PENDING_TRANSFER_HAS_DIFFERENT_CODE otherwise): code=0 reuses
+// the pending transfer's code; a non-zero code must match it. The previous
+// behaviour (defaulting to CodeCapture=2 while authorise uses code 1) was
+// rejected by a real cluster and only passed against the DevClient.
 func (c *RealClient) PostPending(pendingID ID, amount uint64, code uint16) (Result, error) {
-	if code == 0 {
-		code = CodeCapture
-	}
 	pend, err := c.lookupTransfer(pendingID)
 	if err != nil {
 		return Result{Code: PendingTransferNotFound}, nil
 	}
+	if code != 0 && code != pend.Code {
+		return Result{Code: PendingTransferHasDifferentAttr, Message: "code must match the pending transfer's code"}, nil
+	}
 	t := tbtypes.Transfer{
-		ID:              idToU128(pendingResolutionID(pendingID, code)),
+		ID:              idToU128(pendingResolutionID(pendingID, pend.Code)),
 		DebitAccountID:  pend.DebitAccountID,
 		CreditAccountID: pend.CreditAccountID,
 		Amount:          tbtypes.ToUint128(amount),
 		PendingID:       idToU128(pendingID),
 		Ledger:          pend.Ledger,
-		Code:            code,
+		Code:            pend.Code,
 		Flags:           tbtypes.TransferFlags{PostPendingTransfer: true}.ToUint16(),
 	}
 	return c.createOne(t)
 }
 
-// VoidPending voids/releases a pending transfer (codes 3/7 = void_pending).
+// VoidPending voids/releases a pending transfer (void_pending_transfer).
+// The void must carry the pending transfer's code, exactly as PostPending.
 func (c *RealClient) VoidPending(pendingID ID, code uint16) (Result, error) {
-	if code == 0 {
-		code = CodeVoid
-	}
 	pend, err := c.lookupTransfer(pendingID)
 	if err != nil {
 		return Result{Code: PendingTransferNotFound}, nil
 	}
+	if code != 0 && code != pend.Code {
+		return Result{Code: PendingTransferHasDifferentAttr, Message: "code must match the pending transfer's code"}, nil
+	}
 	t := tbtypes.Transfer{
-		ID:              idToU128(pendingResolutionID(pendingID, code)),
+		ID:              idToU128(pendingResolutionID(pendingID, pend.Code)),
 		DebitAccountID:  pend.DebitAccountID,
 		CreditAccountID: pend.CreditAccountID,
 		PendingID:       idToU128(pendingID),
 		Ledger:          pend.Ledger,
-		Code:            code,
+		Code:            pend.Code,
 		Flags:           tbtypes.TransferFlags{VoidPendingTransfer: true}.ToUint16(),
 	}
 	return c.createOne(t)

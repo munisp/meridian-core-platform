@@ -396,8 +396,13 @@ func (c *DevClient) PendingTransfer(t Transfer) (Result, error) {
 	return Result{Code: OK}, nil
 }
 
-// PostPending captures a pending transfer (code 2). Amount may be less than
-// the pending amount; the pending transfer is fully resolved either way.
+// PostPending captures a pending transfer. TigerBeetle requires a
+// post_pending_transfer to carry the SAME code as the pending transfer it
+// resolves; code=0 means "reuse the pending transfer's code" and any other
+// mismatched code is rejected (PENDING_TRANSFER_HAS_DIFFERENT_CODE) so the
+// DevClient cannot mask the defect the real cluster enforces. Amount may be
+// less than the pending amount; the pending transfer is fully resolved
+// either way.
 func (c *DevClient) PostPending(pendingID ID, amount uint64, code uint16) (Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -407,6 +412,9 @@ func (c *DevClient) PostPending(pendingID ID, amount uint64, code uint16) (Resul
 	}
 	if !pt.Pending || pt.Resolved {
 		return Result{Code: PendingTransferNotPending}, nil
+	}
+	if code != 0 && code != pt.Code {
+		return Result{Code: PendingTransferHasDifferentAttr, Message: "code must match the pending transfer's code"}, nil
 	}
 	if amount == 0 {
 		amount = pt.Amount
@@ -438,7 +446,7 @@ func (c *DevClient) PostPending(pendingID ID, amount uint64, code uint16) (Resul
 		CreditAccountID: pt.CreditAccountID,
 		Amount:          amount,
 		Ledger:          pt.Ledger,
-		Code:            code,
+		Code:            pt.Code, // resolution reuses the originating transfer's code
 		Pending:         false,
 		PendingID:       pendingID,
 		UserData:        pt.UserData,
@@ -450,7 +458,9 @@ func (c *DevClient) PostPending(pendingID ID, amount uint64, code uint16) (Resul
 	return Result{Code: OK}, nil
 }
 
-// VoidPending releases a pending reservation (code 3 / 7 release).
+// VoidPending releases a pending reservation. Like PostPending, the void
+// transfer must reuse the pending transfer's code: code=0 selects it
+// automatically, a mismatched non-zero code is rejected.
 func (c *DevClient) VoidPending(pendingID ID, code uint16) (Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -461,13 +471,16 @@ func (c *DevClient) VoidPending(pendingID ID, code uint16) (Result, error) {
 	if !pt.Pending || pt.Resolved {
 		return Result{Code: PendingTransferNotPending}, nil
 	}
+	if code != 0 && code != pt.Code {
+		return Result{Code: PendingTransferHasDifferentAttr, Message: "code must match the pending transfer's code"}, nil
+	}
 	dr := c.accounts[pt.DebitAccountID]
 	cr := c.accounts[pt.CreditAccountID]
 	dr.DebitsPending -= pt.Amount
 	cr.CreditsPending -= pt.Amount
 	pt.Resolved = true
 	voided := *pt
-	voided.Code = code
+	voided.Code = pt.Code
 	voided.Pending = false
 	voided.CreatedAt = now()
 	c.transfers[pendingID] = &voided

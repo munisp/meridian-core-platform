@@ -43,11 +43,11 @@ func TestPendingExpirySweeper(t *testing.T) {
 		t.Fatalf("reservation must be released; p2 untouched: %+v", bal)
 	}
 	// expired pending can no longer be posted
-	if res, _ := c.PostPending(p1, 0, CodeCapture); res.Code != PendingTransferNotPending {
+	if res, _ := c.PostPending(p1, 0, 0); res.Code != PendingTransferNotPending {
 		t.Fatalf("posting an expired pending must fail, got %+v", res)
 	}
 	// the no-timeout pending still posts fine
-	if res, _ := c.PostPending(p2, 0, CodeCapture); res.Code != OK {
+	if res, _ := c.PostPending(p2, 0, 0); res.Code != OK {
 		t.Fatalf("unexpired pending must post, got %+v", res)
 	}
 	// sweeping again is a no-op
