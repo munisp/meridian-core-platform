@@ -50,6 +50,61 @@ from .refund_execution import RefundExecutor, ledger_from_env, refund_id  # noqa
 
 _executor = RefundExecutor(_store, ledger_from_env(), _outbox)
 
+# R4 idempotency TTL: a refund-decision replay window stays open for 7 days
+# (financial safety margin), then the key is treated as new and the record
+# becomes purge-eligible.
+REFUND_IDEMPOTENCY_TTL_SECONDS = 7 * 24 * 3600
+
+
+def _iso(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def _parse_iso(s: str | None) -> float | None:
+    if not s:
+        return None
+    try:
+        import calendar
+        return float(calendar.timegm(time.strptime(s, "%Y-%m-%dT%H:%M:%SZ")))
+    except (ValueError, TypeError):
+        return None
+
+
+def refund_decision_expired(doc: dict, now: float | None = None) -> bool:
+    """True once the decision's replay window has closed. Records written
+    before expires_at existed fall back to decided_at + TTL."""
+    now = time.time() if now is None else now
+    exp = _parse_iso(doc.get("expires_at"))
+    if exp is None:
+        base = _parse_iso(doc.get("decided_at"))
+        exp = base + REFUND_IDEMPOTENCY_TTL_SECONDS if base is not None else None
+    return exp is not None and now > exp
+
+
+def _refund_decision_terminal(doc: dict) -> bool:
+    """Terminal = the refund's funds flow can no longer move money: the
+    execution posted, or the lane never executes (standard). A
+    manual_review decision awaiting approval is NOT terminal."""
+    exe = _store.get("refund_executions", doc.get("refund_id", "")) or doc.get("execution")
+    if exe and exe.get("status") == "posted":
+        return True
+    return doc.get("lane") == "standard"
+
+
+def purge_expired_refund_decisions(now: float | None = None) -> int:
+    """Delete expired refund-decision records whose flow is terminal.
+    In-flight records (manual review pending approval, unposted
+    executions) are retained regardless of expiry so a late retry can
+    still resolve. Returns the number purged."""
+    now = time.time() if now is None else now
+    purged = 0
+    for rid, doc in _store.items("refund_decisions"):
+        if not refund_decision_expired(doc, now) or not _refund_decision_terminal(doc):
+            continue
+        _store.delete("refund_decisions", rid)
+        purged += 1
+    return purged
+
 
 class ReconRecord(BaseModel):
     reference: str
@@ -307,6 +362,8 @@ def refund_fasttrack(req: FastTrackRequest,
     period = req.period or time.strftime("%Y-%m", time.gmtime())
     rid = refund_id(req.tin_hash, period, req.tax_type)
     prior = _store.get("refund_decisions", rid)
+    if prior is not None and refund_decision_expired(prior):
+        prior = None  # expired replay window: a reused key starts fresh
     if prior is not None:
         # funds-flow #3: a stored decision is only a safe replay if the
         # refund was actually POSTED. If the first call 502'd before/during
@@ -338,6 +395,7 @@ def refund_fasttrack(req: FastTrackRequest,
     doc["period"] = period
     doc["tin_hash"] = req.tin_hash
     doc["tax_type"] = req.tax_type
+    doc["expires_at"] = _iso(time.time() + REFUND_IDEMPOTENCY_TTL_SECONDS)
     _store.put("refund_decisions", rid, doc)
     if doc["lane"] == "auto_approve":
         try:
@@ -383,8 +441,11 @@ def refund_manual_approve(rid: str,
 @app.post("/v1/refunds/sweep")
 def refund_sweep(claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
     """Recovery worker hook: resume/void refund executions interrupted by a
-    crash between the pending transfer and the post."""
-    return _executor.sweep_pending()
+    crash between the pending transfer and the post. Also purges expired,
+    terminal refund-decision idempotency records (R4 TTL)."""
+    out = _executor.sweep_pending()
+    out["idempotency_purged"] = purge_expired_refund_decisions()
+    return out
 
 
 @app.get("/v1/recon/breaks")
