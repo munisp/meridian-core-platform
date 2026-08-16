@@ -94,6 +94,24 @@ func (s *Store) Put(coll, id string, v any) error {
 	return s.persistLocked(coll)
 }
 
+// PutIfAbsent inserts a document only when the id is unused, reporting
+// whether the insert happened. It is the atomic, insert-only write used by
+// WORM/immutable collections: no UPDATE privilege is required and the
+// check-and-write race of Get+Put is closed.
+func (s *Store) PutIfAbsent(coll, id string, v any) (bool, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.coll(coll)[id]; ok {
+		return false, nil
+	}
+	s.coll(coll)[id] = b
+	return true, s.persistLocked(coll)
+}
+
 // Get loads a document by id.
 func (s *Store) Get(coll, id string, v any) error {
 	s.mu.RLock()
