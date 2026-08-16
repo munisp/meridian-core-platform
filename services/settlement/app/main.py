@@ -46,7 +46,8 @@ def _start_relay() -> None:  # pragma: no cover
     _relay.start()
 
 
-from .refund_execution import RefundExecutor, ledger_from_env, refund_id  # noqa: E402
+from .refund_execution import (RefundExecutor, RefundPayloadConflict,  # noqa: E402
+                               ledger_from_env, refund_id)
 
 _executor = RefundExecutor(_store, ledger_from_env(), _outbox)
 
@@ -365,6 +366,15 @@ def refund_fasttrack(req: FastTrackRequest,
     if prior is not None and refund_decision_expired(prior):
         prior = None  # expired replay window: a reused key starts fresh
     if prior is not None:
+        # R7 payload binding (w2 #7): the deterministic rid excludes the
+        # amount, so a replay under the same (tin, period, tax_type) key with
+        # a DIFFERENT amount must conflict (409), never silently replay the
+        # original decision/execution.
+        if prior.get("amount_kobo") != req.amount_kobo:
+            raise HTTPException(
+                409, f"refund {rid} already decided for {prior.get('amount_kobo')} "
+                     f"kobo; the same (tin, period, tax_type) key cannot be "
+                     f"reused with {req.amount_kobo} kobo")
         # funds-flow #3: a stored decision is only a safe replay if the
         # refund was actually POSTED. If the first call 502'd before/during
         # execution (or the post failed), re-enter the idempotent executor
@@ -377,6 +387,8 @@ def refund_fasttrack(req: FastTrackRequest,
                                             tax_type=prior.get("tax_type"),
                                             amount_kobo=prior["amount_kobo"],
                                             decision=prior, approved_by="fasttrack:auto")
+                except RefundPayloadConflict as exc:
+                    raise HTTPException(409, str(exc)) from exc
                 except Exception as exc:  # noqa: BLE001
                     raise HTTPException(502, f"refund execution failed: {exc}") from exc
                 prior["execution"] = exe
@@ -402,6 +414,8 @@ def refund_fasttrack(req: FastTrackRequest,
             exe = _executor.execute(tin_hash=req.tin_hash, period=period,
                                     tax_type=req.tax_type, amount_kobo=req.amount_kobo,
                                     decision=doc, approved_by="fasttrack:auto")
+        except RefundPayloadConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(502, f"refund execution failed: {exc}") from exc
         doc["execution"] = exe
