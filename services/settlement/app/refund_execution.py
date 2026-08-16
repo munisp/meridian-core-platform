@@ -35,6 +35,14 @@ def deterministic_id(seed: str) -> str:
     return hashlib.sha256(seed.encode()).hexdigest()[:32]
 
 
+class RefundPayloadConflict(Exception):
+    """The deterministic refund key (tin_hash, period, tax_type) was reused
+    with a DIFFERENT amount. The refund id intentionally excludes the
+    amount (w2 #7), so the executor itself must bind the payload: a
+    mismatched replay is rejected (409-class), never silently served the
+    original execution."""
+
+
 def refund_id(tin_hash: str, period: str, tax_type: str | None) -> str:
     return "ref-" + deterministic_id(f"refund:{tin_hash}:{period}:{tax_type or 'any'}")[:24]
 
@@ -230,6 +238,11 @@ class RefundExecutor:
         rid = refund_id(tin_hash, period, tax_type)
         existing = self.store.get("refund_executions", rid)
         if existing is not None and existing.get("status") in ("posted", "pending"):
+            if existing.get("amount_kobo") != amount_kobo:
+                raise RefundPayloadConflict(
+                    f"refund {rid} already executed for "
+                    f"{existing.get('amount_kobo')} kobo; refusing replay with "
+                    f"{amount_kobo} kobo under the same (tin, period, tax_type) key")
             return {**existing, "idempotent_replay": True}
         # post_failed: the compensation voided the original pending, so a
         # retry must use a fresh deterministic attempt id (create_pending
@@ -258,6 +271,10 @@ class RefundExecutor:
             "status": "pending", "approved_by": approved_by,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
+        # NOTE: every store write below persists a COPY (dict(exe)) — the
+        # executor keeps mutating exe in place, and a failed write must not
+        # leave the stored document aliasing later in-memory state (R7:
+        # found via db-fault injection on the 'posted' write).
         try:
             self.ledger.create_pending({
                 "id": pend_id, "debit": tre, "credit": tax,
@@ -266,10 +283,10 @@ class RefundExecutor:
         except Exception as exc:  # noqa: BLE001
             exe["status"] = "failed"
             exe["fail_reason"] = f"create pending: {exc}"
-            self.store.put("refund_executions", rid, exe)
+            self.store.put("refund_executions", rid, dict(exe))
             raise
         # single durable write binding BOTH transfer ids before the post
-        self.store.put("refund_executions", rid, exe)
+        self.store.put("refund_executions", rid, dict(exe))
         return self._finish(rid, exe, amount_kobo)
 
     def _finish(self, rid: str, exe: dict, amount_kobo: int) -> dict:
@@ -280,11 +297,11 @@ class RefundExecutor:
             self.ledger.void_pending(exe["pending_transfer_id"])
             exe["status"] = "post_failed"
             exe["fail_reason"] = f"post pending: {exc}"
-            self.store.put("refund_executions", rid, exe)
+            self.store.put("refund_executions", rid, dict(exe))
             raise
         exe["status"] = "posted"
         exe["posted_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        self.store.put("refund_executions", rid, exe)
+        self.store.put("refund_executions", rid, dict(exe))
         self._emit("nrs.refund.executed.v1", {
             "dedup_key": "refund:" + rid, "refund_id": rid, "tin_hash": exe["tin_hash"],
             "amount_kobo": amount_kobo, "period": exe["period"], "tax_type": exe["tax_type"],
@@ -305,7 +322,7 @@ class RefundExecutor:
                 # the post actually landed before the crash: mark posted
                 exe["status"] = "posted"
                 exe["posted_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                self.store.put("refund_executions", exe["refund_id"], exe)
+                self.store.put("refund_executions", exe["refund_id"], dict(exe))
                 resumed += 1
             elif pend is not None and pend.get("pending") and not pend.get("resolved"):
                 try:
@@ -316,6 +333,6 @@ class RefundExecutor:
             else:
                 exe["status"] = "voided"
                 exe["fail_reason"] = "sweeper: pending missing or already resolved"
-                self.store.put("refund_executions", exe["refund_id"], exe)
+                self.store.put("refund_executions", exe["refund_id"], dict(exe))
                 voided += 1
         return {"resumed": resumed, "voided": voided}
