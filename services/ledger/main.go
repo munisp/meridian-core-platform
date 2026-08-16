@@ -21,6 +21,7 @@ import (
 	"github.com/munisp/meridian-core-platform/packages/events/envelope"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"github.com/munisp/meridian-core-platform/packages/events/outbox"
+	sdkx "github.com/munisp/meridian-core-platform/packages/temporal-sdkx"
 	"github.com/munisp/meridian-core-platform/services/ledger/internal/tb"
 )
 
@@ -56,6 +57,10 @@ type server struct {
 	out    outbox.Store
 	dir    string
 	thresh *thresholdTracker // I7: CTR ₦10m / structuring detection
+	// wfRunner executes the money sagas (CaptureSaga/RefundWorkflow);
+	// *sdkx.TemporalRunner when TEMPORAL_URL is set, inproc dev runner
+	// otherwise (docs/temporal-migration.md).
+	wfRunner sdkx.Runner
 }
 
 func main() {
@@ -92,6 +97,7 @@ func main() {
 		client = dev
 	}
 	srv := &server{client: client, dev: dev, dir: dir, thresh: newThresholdTracker()}
+	srv.initMoneyWorkflows()
 
 	if dev != nil {
 		// durable snapshot restore
