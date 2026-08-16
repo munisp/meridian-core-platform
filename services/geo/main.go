@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"github.com/munisp/meridian-core-platform/services/geo/internal/geojson"
+	"github.com/munisp/meridian-core-platform/services/geo/internal/postgis"
 )
 
 const (
@@ -22,7 +24,8 @@ const (
 
 type server struct {
 	ds    *geojson.Dataset
-	geoRS string // GEO_RS_URL, "" = embedded only
+	geoRS string          // GEO_RS_URL, "" = not configured
+	pg    *postgis.Engine // non-nil when DATABASE_URL set (PostGIS engine)
 	hc    *http.Client
 }
 
@@ -44,6 +47,26 @@ func main() {
 		ds:    ds,
 		geoRS: httpx.Env("GEO_RS_URL", ""),
 		hc:    &http.Client{Timeout: 3 * time.Second},
+	}
+
+	// DATABASE_URL selects the PostGIS engine (real ST_* queries); the
+	// embedded pure-Go engine remains the fallback when it is unset. A
+	// configured-but-broken DATABASE_URL fails closed in prod, and falls
+	// back with a loud log line in dev.
+	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		eng, err := postgis.Open(ctx, dbURL, ds)
+		cancel()
+		if err != nil {
+			if os.Getenv("PROFILE") == "prod" {
+				log.Fatalf("component=geo FATAL: DATABASE_URL set but PostGIS unavailable (%v); failing closed", err)
+			}
+			log.Printf("component=geo postgis unavailable (%v); embedded engine fallback", err)
+		} else {
+			s.pg = eng
+			defer eng.Close()
+			log.Printf("component=geo engine=postgis")
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -86,8 +109,29 @@ func (s *server) viaGeoRS(ctx context.Context, lat, lon float64) *geojson.Attrib
 	return &att
 }
 
+// viaPostGIS answers attribution with the real ST_Covers query when the
+// PostGIS engine is configured; a query error or miss falls back to the
+// embedded engine.
+func (s *server) viaPostGIS(ctx context.Context, lat, lon float64) *geojson.Attribution {
+	if s.pg == nil {
+		return nil
+	}
+	att, err := s.pg.AttributePoint(ctx, lat, lon)
+	if err != nil {
+		log.Printf("postgis query failed, embedded fallback: %v", err)
+		return nil
+	}
+	if att == nil {
+		return nil // outside all state polygons; embedded agrees or also misses
+	}
+	return &geojson.Attribution{State: att.State, StateCode: att.StateCode, Source: "postgis"}
+}
+
 func (s *server) attribute(ctx context.Context, lat, lon float64) *geojson.Attribution {
 	if att := s.viaGeoRS(ctx, lat, lon); att != nil {
+		return att
+	}
+	if att := s.viaPostGIS(ctx, lat, lon); att != nil {
 		return att
 	}
 	return s.ds.AttributePoint(lat, lon)
