@@ -139,7 +139,9 @@ func main() {
 	mux := s.routes()
 	addr := ":" + httpx.Port("8003")
 	log.Printf("%s %s (thresholds auto=%.2f review=%.2f)", service, version, s.cfg.AutoMatchThreshold, s.cfg.ReviewThreshold)
-	log.Fatal(httpx.ListenAndServe(addr, auth.Middleware(mux)))
+	httpx.InitMetrics(service, version)
+	httpx.StartMetricsServer()
+	log.Fatal(httpx.ListenAndServe(addr, auth.Middleware(httpx.Instrument(mux))))
 }
 
 // routes registers the HTTP API. Authz (audit M-3): POST /v1/tin/provision

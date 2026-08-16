@@ -256,7 +256,9 @@ func main() {
 
 	addr := ":" + httpx.Port("8009")
 	log.Printf("%s %s (waf=%s)", service, version, s.wafMode())
-	log.Fatal(httpx.ListenAndServe(addr, auth.Middleware(mux)))
+	httpx.InitMetrics(service, version)
+	httpx.StartMetricsServer()
+	log.Fatal(httpx.ListenAndServe(addr, auth.Middleware(httpx.Instrument(mux))))
 }
 
 func (s *server) routes(w http.ResponseWriter, r *http.Request) {
