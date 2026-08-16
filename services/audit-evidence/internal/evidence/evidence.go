@@ -226,6 +226,8 @@ func (ws *WormStore) Put(id string, content []byte, contentType string, meta map
 		sum := sha256.Sum256(content)
 		id = "ev-" + hex.EncodeToString(sum[:8]) + "-" + envelope.NewULID()[14:]
 	}
+	// Fast-path existence check; the authoritative insert below is atomic
+	// (PutIfAbsent) so a concurrent Put of the same id can never overwrite.
 	var existing Object
 	if err := ws.st.Get("evidence", id, &existing); err == nil {
 		return Object{}, errImmutable
@@ -248,6 +250,21 @@ func (ws *WormStore) Put(id string, content []byte, contentType string, meta map
 	}
 	if _, local := ws.backend.(localBackend); local {
 		obj.StoragePath = ws.dir + "/" + id + ".bin"
+	}
+	// Insert-only persist (r9 pentest defect): the audit schema grants
+	// svc_audit_evidence INSERT but not UPDATE, so the upsert in Put 500s
+	// every evidence write in prod; WORM semantics are insert-only anyway.
+	if ps, ok := ws.st.(interface {
+		PutIfAbsent(coll, id string, v any) (bool, error)
+	}); ok {
+		inserted, err := ps.PutIfAbsent("evidence", id, obj)
+		if err != nil {
+			return Object{}, err
+		}
+		if !inserted {
+			return Object{}, errImmutable
+		}
+		return obj, nil
 	}
 	if err := ws.st.Put("evidence", id, obj); err != nil {
 		return Object{}, err

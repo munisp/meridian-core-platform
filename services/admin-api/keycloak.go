@@ -31,26 +31,38 @@ type jwksKey struct {
 }
 
 type keycloakVerifier struct {
-	jwksURL string
-	client  *http.Client
-	mu      sync.RWMutex
-	keys    map[string]*rsa.PublicKey
-	fetched time.Time
+	jwksURL  string
+	issuer   string // expected iss; validated when set
+	audience string // expected aud; validated when set
+	client   *http.Client
+	mu       sync.RWMutex
+	keys     map[string]*rsa.PublicKey
+	fetched  time.Time
 }
 
 func newKeycloakVerifier() (*keycloakVerifier, error) {
 	url := os.Getenv("KEYCLOAK_JWKS_URL")
+	issuer := os.Getenv("KEYCLOAK_ISSUER")
+	if issuer == "" {
+		issuer = os.Getenv("OIDC_ISSUER_URL")
+	}
+	issuer = strings.TrimSuffix(issuer, "/")
 	if url == "" {
-		issuer := os.Getenv("OIDC_ISSUER_URL")
 		if issuer == "" {
 			return nil, fmt.Errorf("KEYCLOAK_JWKS_URL or OIDC_ISSUER_URL must be set in keycloak mode")
 		}
-		url = strings.TrimSuffix(issuer, "/") + "/protocol/openid-connect/certs"
+		url = issuer + "/protocol/openid-connect/certs"
+	}
+	audience := os.Getenv("KEYCLOAK_AUDIENCE")
+	if os.Getenv("PROFILE") == "prod" && audience == "" {
+		return nil, fmt.Errorf("KEYCLOAK_AUDIENCE must be set in prod keycloak mode (audience confusion fail-closed)")
 	}
 	v := &keycloakVerifier{
-		jwksURL: url,
-		client:  &http.Client{Timeout: 3 * time.Second},
-		keys:    map[string]*rsa.PublicKey{},
+		jwksURL:  url,
+		issuer:   issuer,
+		audience: audience,
+		client:   &http.Client{Timeout: 3 * time.Second},
+		keys:     map[string]*rsa.PublicKey{},
 	}
 	if err := v.refresh(); err != nil {
 		return nil, err
@@ -155,16 +167,25 @@ func (v *keycloakVerifier) verifyJWT(tok string) (*claims, error) {
 		RealmAccess struct {
 			Roles []string `json:"roles"`
 		} `json:"realm_access"`
-		TenantID string `json:"tenant_id"`
-		Issuer   string `json:"iss"`
-		Expires  int64   `json:"exp"`
-		IssuedAt int64   `json:"iat"`
+		TenantID string   `json:"tenant_id"`
+		Issuer   string   `json:"iss"`
+		Aud      any      `json:"aud"` // string or []string
+		Expires  int64    `json:"exp"`
+		IssuedAt int64    `json:"iat"`
 	}
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		return nil, errString("bad claims")
 	}
 	if time.Now().Unix() > raw.Expires {
 		return nil, errString("token expired")
+	}
+	// r9 pentest defect: iss/aud were not validated — a token minted for any
+	// other audience/issuer but signed by the realm key was accepted.
+	if v.issuer != "" && raw.Issuer != v.issuer {
+		return nil, errString("unexpected issuer")
+	}
+	if v.audience != "" && !audContains(raw.Aud, v.audience) {
+		return nil, errString("unexpected audience")
 	}
 	roles := raw.Roles
 	if len(roles) == 0 {
@@ -174,4 +195,20 @@ func (v *keycloakVerifier) verifyJWT(tok string) (*claims, error) {
 		Sub: raw.Sub, Email: raw.Email, Roles: roles, TenantID: raw.TenantID,
 		Issuer: raw.Issuer, IssuedAt: raw.IssuedAt, Expires: raw.Expires,
 	}, nil
+}
+
+// audContains reports whether the JWT aud claim (string or array) includes
+// the expected audience.
+func audContains(aud any, want string) bool {
+	switch a := aud.(type) {
+	case string:
+		return a == want
+	case []any:
+		for _, v := range a {
+			if s, ok := v.(string); ok && s == want {
+				return true
+			}
+		}
+	}
+	return false
 }
