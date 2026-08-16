@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"sort"
 )
@@ -161,18 +162,50 @@ func (a *app) handleWorkflowTrigger(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusNotFound, "workflow not triggerable", id)
 		return
 	}
+	a.store.mu.Unlock()
 	run := WorkflowRun{
-		ID: newID("run"), WorkflowID: id, Status: "completed",
+		ID: newID("run"), WorkflowID: id,
 		Triggered: actorOf(r), Input: body.Input,
-		StartedAt: nowRFC3339(), FinishedAt: nowRFC3339(),
+		StartedAt: nowRFC3339(),
 	}
+	// Execute through the env-selected runner (docs/temporal-migration.md):
+	// TEMPORAL_URL set -> real Temporal worker; unset -> sdkx inproc runner.
+	// Status reflects the actual result — no fake "completed" rows.
+	if a.wfRunner == nil {
+		a.initWorkflows() // tests that build app{} directly
+	}
+	var execErr error
+	if _, ok := a.wfExec[id]; !ok {
+		execErr = fmt.Errorf("workflow %q has no registered implementation in this binary", id)
+	} else {
+		_, execErr = a.wfRunner.Execute(r.Context(), id, body.Input)
+	}
+	run.FinishedAt = nowRFC3339()
+	if execErr != nil {
+		run.Status = "failed"
+	} else {
+		run.Status = "completed"
+	}
+	a.store.mu.Lock()
 	a.store.WorkflowRuns = append([]WorkflowRun{run}, a.store.WorkflowRuns...)
 	a.store.mu.Unlock()
 	a.appendAudit("workflow.triggered", id, actorOf(r), "trigger", body.Input)
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"run": run, "mode": "dev-inproc",
-		"note": "TEMPORAL_URL unset — executed via dev in-process runner semantics",
+	status := http.StatusCreated
+	if execErr != nil {
+		status = http.StatusUnprocessableEntity
+	}
+	writeJSON(w, status, map[string]any{
+		"run":  run,
+		"mode": a.workflowMode(),
+		"note": noteOrErr(execErr),
 	})
+}
+
+func noteOrErr(err error) string {
+	if err == nil {
+		return "executed via the env-selected runner (dev-inproc unless TEMPORAL_URL is set)"
+	}
+	return "execution failed: " + err.Error()
 }
 
 func (a *app) handleWorkflowRuns(w http.ResponseWriter, r *http.Request) {

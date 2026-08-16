@@ -10,6 +10,7 @@ import (
 	"time"
 
 	permifymodels "github.com/munisp/meridian-core-platform/packages/permify-models"
+	"github.com/munisp/meridian-core-platform/packages/temporal-sdkx"
 )
 
 const version = "0.1.0"
@@ -19,8 +20,10 @@ type app struct {
 	client    *http.Client // downstream calls, short timeout
 	jwtSecret string
 	authMode  string
-	pg        *pgUsers              // non-nil when DATABASE_URL is configured (A6)
-	perm      *permifymodels.Client // non-nil when PERMIFY_URL is configured (P0 authz)
+	pg        *pgUsers                 // non-nil when DATABASE_URL is configured (A6)
+	perm      *permifymodels.Client    // non-nil when PERMIFY_URL is configured (P0 authz)
+	wfRunner  sdkx.Runner              // env-selected workflow runner (temporal | dev-inproc)
+	wfExec    map[string]sdkx.Workflow // triggerable def id -> executable workflow
 }
 
 func envOr(key, def string) string {
@@ -70,6 +73,10 @@ func main() {
 		}
 	}
 	a.store.mu.Unlock()
+
+	// Temporal worker wiring (docs/temporal-migration.md reference): executes
+	// triggerable workflow defs through the env-selected sdkx runner.
+	a.initWorkflows()
 
 	mux := http.NewServeMux()
 
