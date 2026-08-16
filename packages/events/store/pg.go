@@ -57,6 +57,10 @@ type PgStore struct {
 // OpenPg connects to DATABASE_URL, auto-migrates the schema, and returns
 // the store. The caller owns Close.
 func OpenPg(ctx context.Context, databaseURL string) (*PgStore, error) {
+	return openPg(ctx, databaseURL, true)
+}
+
+func openPg(ctx context.Context, databaseURL string, migrate bool) (*PgStore, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("store pg: parse DATABASE_URL: %w", err)
@@ -71,16 +75,47 @@ func OpenPg(ctx context.Context, databaseURL string) (*PgStore, error) {
 		pool.Close()
 		return nil, fmt.Errorf("store pg: ping: %w", err)
 	}
+	if migrate {
+		if err := migratePg(ctx, pool); err != nil {
+			pool.Close()
+			return nil, err
+		}
+	}
+	return &PgStore{pool: pool}, nil
+}
+
+func migratePg(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, PgDDL); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("store pg: migrate: %w", err)
+		return fmt.Errorf("store pg: migrate: %w", err)
 	}
 	// Transactional outbox table (audit I2) — idempotent.
 	if _, err := pool.Exec(ctx, PgOutboxDDL); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("store pg: outbox migrate: %w", err)
+		return fmt.Errorf("store pg: outbox migrate: %w", err)
 	}
-	return &PgStore{pool: pool}, nil
+	return nil
+}
+
+// MigratePg runs the idempotent schema DDL against the given URL and closes
+// the pool. Used for the migration-role split: services boot with
+// DB_MIGRATE_USER (svc_migrator, see infra/postgres/migrations/
+// 0004_migrator_role.sql) for this step, then serve runtime traffic on
+// their least-privilege svc_* role, which cannot run DDL.
+func MigratePg(ctx context.Context, databaseURL string) error {
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return fmt.Errorf("store pg: parse migrate DATABASE_URL: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("store pg: migrate connect: %w", err)
+	}
+	defer pool.Close()
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := pool.Ping(pingCtx); err != nil {
+		return fmt.Errorf("store pg: migrate ping: %w", err)
+	}
+	return migratePg(ctx, pool)
 }
 
 // Close releases the connection pool.
@@ -240,6 +275,26 @@ func ResolveDatabaseURL() string {
 	return u.String()
 }
 
+// ResolveMigrateDatabaseURL returns DATABASE_URL with the migration-role
+// credentials (DB_MIGRATE_USER/DB_MIGRATE_PASSWORD, svc_migrator from
+// infra/postgres/migrations/0004_migrator_role.sql) substituted in. Returns
+// "" when DB_MIGRATE_USER or DATABASE_URL is unset — the caller then falls
+// back to the legacy path where the runtime user runs the DDL itself.
+func ResolveMigrateDatabaseURL() string {
+	url := os.Getenv("DATABASE_URL")
+	user := os.Getenv("DB_MIGRATE_USER")
+	if url == "" || user == "" {
+		return ""
+	}
+	u, err := neturl.Parse(url)
+	if err != nil {
+		log.Printf("component=store WARNING: unparseable DATABASE_URL (%v); using as-is", err)
+		return url
+	}
+	u.User = neturl.UserPassword(user, os.Getenv("DB_MIGRATE_PASSWORD"))
+	return u.String()
+}
+
 // OpenFromEnv selects the store per HARDENING H1, failing closed:
 //
 //   - DATABASE_URL set -> Postgres is REQUIRED; a connection failure is a
@@ -248,10 +303,27 @@ func ResolveDatabaseURL() string {
 //     consent/audit writes in ephemeral per-pod files).
 //   - DATABASE_URL unset -> the embedded JSON store is allowed only outside
 //     prod; PROFILE=prod refuses to boot without DATABASE_URL.
+//
+// Migration-role split (gates finding): when DB_MIGRATE_USER is set the
+// boot-time auto-migrate runs as svc_migrator and the runtime pool opens
+// WITHOUT DDL privileges; otherwise the runtime user runs the DDL itself
+// (legacy behaviour — fails against the 0003-hardened svc_* roles, which
+// have CREATE revoked).
 func OpenFromEnv(dir string) (DocStore, error) {
 	if url := ResolveDatabaseURL(); url != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		if murl := ResolveMigrateDatabaseURL(); murl != "" {
+			if err := MigratePg(ctx, murl); err != nil {
+				return nil, fmt.Errorf("boot-time migrate as DB_MIGRATE_USER failed (%v); refusing embedded fallback", err)
+			}
+			pg, err := openPg(ctx, url, false)
+			if err != nil {
+				return nil, fmt.Errorf("DATABASE_URL is set but Postgres is unreachable (%v); refusing embedded fallback", err)
+			}
+			log.Printf("profile=prod component=store postgres migrate-role=%s", os.Getenv("DB_MIGRATE_USER"))
+			return pg, nil
+		}
 		pg, err := OpenPg(ctx, url)
 		if err != nil {
 			return nil, fmt.Errorf("DATABASE_URL is set but Postgres is unreachable (%v); refusing embedded fallback", err)

@@ -57,8 +57,11 @@ services:
       - pgdata:/var/lib/postgresql/data
       # Idempotent per-service schema init (CREATE SCHEMA IF NOT EXISTS ...)
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
-      # Least-privilege roles (0003_roles.sql) — applied via pgmigrate /
-      # ops psql, mounted read-only for the backup sidecar & runbooks.
+      # Least-privilege roles (0003_roles.sql) + migration/runtime split
+      # (0004_migrator_role.sql) — applied via pgmigrate / ops psql, mounted
+      # read-only for the backup sidecar & runbooks. App services boot with
+      # DB_MIGRATE_USER=svc_migrator for the migrate step and their svc_*
+      # role at runtime (see infra/postgres/README.md, .env.prod.template).
       - ./postgres/migrations:/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
