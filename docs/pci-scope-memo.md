@@ -52,7 +52,7 @@ the integrating merchant entities — not to this platform.
 - Any future card-capture feature MUST be reviewed against this memo before
   merge; introduce PAN only behind a documented PSP tokenization boundary.
 - If a CDE is ever established: network segmentation review (Cilium policies
-  in `infra/cilium/`), key management (packages/keyx ceremony doc), and PCI
+  in `infra/cilium/`), key management (`packages/keyx/KEY_CEREMONY.md`), and PCI
   DSS v4.0 requirements mapping become mandatory follow-ups.
 
 ## Sign-off block (counsel/QSA)
