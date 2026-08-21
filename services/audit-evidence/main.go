@@ -2,7 +2,10 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"log"
 	"net/http"
 	"os"
@@ -24,6 +27,15 @@ type server struct {
 	sealKey string
 }
 
+// deriveChainKey provides A1-12 domain separation: when TAT_CHAIN_HMAC_KEY
+// is unset, the chain HMAC key is derived from the seal key under a distinct
+// domain label instead of reusing the seal key raw.
+func deriveChainKey(sealKey string) string {
+	mac := hmac.New(sha256.New, []byte(sealKey))
+	mac.Write([]byte("meridian/audit-evidence/tat-chain-hmac/v1"))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func main() {
 	dir := httpx.Env("DATA_DIR", "./data")
 	// A5: dedicated seal/chain keys. PROFILE=prod REQUIRES TAT_SEAL_KEY —
@@ -39,7 +51,7 @@ func main() {
 	}
 	chainKey := os.Getenv("TAT_CHAIN_HMAC_KEY")
 	if chainKey == "" {
-		chainKey = sealKey // chain HMAC key derives from the seal key by default
+		chainKey = deriveChainKey(sealKey)
 	}
 	st, err := store.OpenFromEnv(dir)
 	if err != nil {
