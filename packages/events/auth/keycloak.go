@@ -71,8 +71,18 @@ func NewKeycloakVerifier(cfg KeycloakConfig) (*KeycloakVerifier, error) {
 }
 
 // NewKeycloakVerifierFromEnv creates a verifier from the H1 env contract.
+//
+// A1-08: in PROFILE=prod, KEYCLOAK_AUDIENCE is mandatory — without audience
+// pinning any token minted for ANY client of the realm is accepted
+// (audience confusion). Refuse to construct the verifier (callers fail
+// closed) rather than serve unverified auth. Mirrors the compliance authx
+// fix (meridian-compliance-suite PR #29) and admin-api keycloak.go.
 func NewKeycloakVerifierFromEnv() (*KeycloakVerifier, error) {
-	return NewKeycloakVerifier(KeycloakConfigFromEnv())
+	cfg := KeycloakConfigFromEnv()
+	if httpx.Env("PROFILE", "dev") == "prod" && cfg.Audience == "" {
+		return nil, errors.New("keycloak: PROFILE=prod requires KEYCLOAK_AUDIENCE to be set explicitly (fail-closed: audience confusion otherwise)")
+	}
+	return NewKeycloakVerifier(cfg)
 }
 
 type jwksDoc struct {

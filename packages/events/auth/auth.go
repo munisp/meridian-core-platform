@@ -45,8 +45,26 @@ func FromContext(ctx context.Context) (Claims, bool) {
 	return c, ok
 }
 
+// devSecretDefault is the well-known insecure dev JWT secret (A1-10).
+const devSecretDefault = "meridian-dev-secret-change-me"
+
 func secret() string {
-	return httpx.Env("MERIDIAN_DEV_JWT_SECRET", "meridian-dev-secret-change-me")
+	return httpx.Env("MERIDIAN_DEV_JWT_SECRET", devSecretDefault)
+}
+
+// ProdMisconfigured reports whether the process runs with PROFILE=prod but
+// forgeable dev auth: AUTH_MODE=dev (X-Dev-Role honoured) or the
+// default/missing MERIDIAN_DEV_JWT_SECRET (A1-10). Middleware fails closed
+// in this state rather than serving forgeable auth.
+func ProdMisconfigured() bool {
+	if httpx.Env("PROFILE", "dev") != "prod" {
+		return false
+	}
+	if httpx.Env("AUTH_MODE", "dev") == "dev" {
+		return true
+	}
+	s := secret()
+	return s == "" || s == devSecretDefault
 }
 
 // SignHS256 issues a compact HS256 JWT for the given claims (dev issuer).
@@ -106,6 +124,15 @@ var devRoles = map[string]bool{"admin": true, "operator": true, "auditor": true,
 // and /readyz which should be registered before wrapping.
 func Middleware(next http.Handler) http.Handler {
 	mode := httpx.Env("AUTH_MODE", "dev")
+	// A1-10: PROFILE=prod with dev-mode auth or the default/missing dev
+	// secret must never serve — both are fully forgeable. Fail closed.
+	if ProdMisconfigured() {
+		httpx.ProfileLog("auth", "prod", "PROFILE=prod with AUTH_MODE=dev or default/missing MERIDIAN_DEV_JWT_SECRET; FAILING CLOSED — all requests denied")
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			httpx.Errorf(w, http.StatusServiceUnavailable, "auth misconfigured",
+				"PROFILE=prod refuses dev auth / default JWT secret; refusing all requests (fail closed)")
+		})
+	}
 	if mode == "keycloak" {
 		if _, err := SharedKeycloakVerifier(); err != nil {
 			// FAIL CLOSED (audit: prod selector set but auth fell back to
