@@ -17,11 +17,17 @@ export default function Tenants() {
   const [tForm, setTForm] = useState({ name: '', isolation: 'row', contact_email: '' })
   const [uForm, setUForm] = useState({ email: '', name: '', roles: 'operator', tenant_id: '', password: '' })
   const [msg, setMsg] = useState('')
+  const [loadErr, setLoadErr] = useState('')
 
   function load() {
-    api.get('/v1/admin/tenants').then((r) => setTenants(r.data || [])).catch(() => {})
-    api.get('/v1/admin/users').then((r) => setUsers(r.data || [])).catch(() => {})
-    api.get('/v1/admin/identity/relations').then((r) => setRelations(r.data || [])).catch(() => {})
+    setLoadErr('')
+    const errs: string[] = []
+    api.get('/v1/admin/tenants').then((r) => setTenants(r.data || []))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
+    api.get('/v1/admin/users').then((r) => setUsers(r.data || []))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
+    api.get('/v1/admin/identity/relations').then((r) => setRelations(r.data || []))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
   }
   useEffect(load, [])
 
@@ -175,14 +181,6 @@ export default function Tenants() {
           <Field label={tr('tenants.passwordDev')}>{(id) => <input id={id} className="input" value={uForm.password} onChange={(e) => setUForm({ ...uForm, password: e.target.value })} placeholder={tr('tenants.passwordPlaceholder')} />}</Field>
           <div className="flex justify-end gap-2">
             <button type="button" className="btn-secondary" onClick={() => setShowUser(false)}>{tr('tenants.cancel')}</button>
-            <button className="btn-primary">{tr('tenants.createUser')}</button>
-          </div>
-        </form>
-      </Modal>
-    </div>
-  )
-}
-lick={() => setShowUser(false)}>{tr('tenants.cancel')}</button>
             <button className="btn-primary">{tr('tenants.createUser')}</button>
           </div>
         </form>
