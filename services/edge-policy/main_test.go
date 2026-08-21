@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/munisp/meridian-core-platform/packages/events/store"
 )
 
 func TestRenderAPISIX(t *testing.T) {
@@ -111,6 +113,69 @@ func TestRenderAPISIXOTPClass(t *testing.T) {
 	y := renderAPISIX(routes, "enforce")
 	if !strings.Contains(y, "limit-count:") || !strings.Contains(y, "count: 100") || !strings.Contains(y, "time_window: 86400") {
 		t.Fatalf("OTP class must render limit-count 100/day:\n%s", y)
+	}
+}
+
+// Regression (A1-06): the WAF must default to enforce. A fresh deploy with
+// nothing persisted and no env set must render blocking rules; detect is an
+// explicit opt-out (WAF_MODE=detect) for dev shadowing only; unknown env
+// values fail safe to enforce; a persisted valid mode still wins.
+func TestWAFModeDefaultsToEnforce(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &server{st: st}
+
+	t.Setenv("WAF_MODE", "")
+	if got := s.wafMode(); got != "enforce" {
+		t.Fatalf("unset WAF_MODE: got %q, want enforce", got)
+	}
+	t.Setenv("WAF_MODE", "detect")
+	if got := s.wafMode(); got != "detect" {
+		t.Fatalf("WAF_MODE=detect: got %q, want detect (explicit dev opt-out)", got)
+	}
+	t.Setenv("WAF_MODE", "shadow") // unrecognised -> fail safe
+	if got := s.wafMode(); got != "enforce" {
+		t.Fatalf("WAF_MODE=shadow: got %q, want enforce (fail-safe)", got)
+	}
+	// persisted mode wins over env
+	if err := st.Put("config", "waf_mode", map[string]any{"mode": "detect"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WAF_MODE", "")
+	if got := s.wafMode(); got != "detect" {
+		t.Fatalf("persisted detect must win: got %q", got)
+	}
+}
+
+// Regression (A1-06): with the secure default the rendered APISIX config on
+// a fresh boot carries blocking WAF rules on every route.
+func TestRenderAPISIXFreshBootEnforces(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WAF_MODE", "")
+	s := &server{st: st}
+	y := renderAPISIX(defaultRoutes, s.wafMode())
+	if !strings.Contains(y, "serverless-pre-function") || !strings.Contains(y, "ngx.exit(403)") {
+		t.Fatal("fresh boot must render enforce-mode WAF blocking rules")
+	}
+}
+
+// Regression (A1-06): the enforce-mode Lua must inspect request bodies, not
+// just URI/args, and fail closed on uninspectable bodies.
+func TestWAFLuaInspectsRequestBody(t *testing.T) {
+	for _, want := range []string{
+		"ngx.req.read_body",   // body read at rewrite phase
+		"get_body_data",       // body content inspected
+		"content_length",      // size gate
+		"target .. \" \" .. lower(body)", // body folded into match target
+	} {
+		if !strings.Contains(wafServerlessLua, want) {
+			t.Fatalf("WAF Lua missing body-inspection artifact %q", want)
+		}
 	}
 }
 

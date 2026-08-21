@@ -437,9 +437,11 @@ services:
   apisix:
     image: ${IMG_APISIX:-apache/apisix:3.9.0-debian}
     restart: unless-stopped
-    # NOTE: APISIX terminates public TLS and is the WAF enforcement point
-    # (edge-policy svc flips waf mode detect→enforce via Admin API; see
-    # docs/security.md F9/F10). SSL routes are synced from etcd/edge-policy.
+    # NOTE: APISIX terminates public TLS and is the WAF enforcement point.
+    # A1-06: edge-policy boots in enforce mode by default (WAF_MODE=enforce,
+    # pinned in infra/helm/values-prod.yaml); SQLi/XSS/traversal blocking on
+    # URI+args+request body is active from first boot. SSL routes are synced
+    # from etcd/edge-policy.
     environment:
       APISIX_ADMIN_KEY: ${APISIX_ADMIN_KEY}
       ETCD_PASSWORD: ${ETCD_ROOT_PASSWORD}
