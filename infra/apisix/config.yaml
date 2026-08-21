@@ -21,8 +21,11 @@ deployment:
     timeout: 30
     user: root
     password: ${ETCD_ROOT_PASSWORD}
-# WAF note: edge-policy flips mode detect→enforce (POST /v1/waf/mode); APISIX
-# plugin config per route is synced by edge-policy from this register.
+# WAF note (A1-06): edge-policy defaults to enforce (WAF_MODE=enforce pinned
+# in infra/helm/values-prod.yaml); detect is an explicit dev opt-out only.
+# Enforce mode renders serverless-pre-function SQLi/XSS/traversal blocking
+# (URI+args+request body) and a scanner-UA denylist per route. APISIX plugin
+# config per route is synced by edge-policy from this register.
 plugins:
   - cors
   - jwt-auth

@@ -66,15 +66,31 @@ type server struct {
 	st store.DocStore
 }
 
-// wafMode returns the persisted WAF mode (default detect).
+// defaultWAFMode is the boot-time WAF posture when no mode has been
+// persisted yet (A1-06). The secure default is "enforce": SQLi/XSS/
+// traversal blocking is ACTIVE on a fresh deploy. Dev environments may opt
+// out explicitly with WAF_MODE=detect (shadow/observe-only). Any
+// unrecognised value fails safe to enforce.
+func defaultWAFMode() string {
+	switch m := strings.TrimSpace(httpx.Env("WAF_MODE", "enforce")); m {
+	case "detect", "enforce":
+		return m
+	default:
+		return "enforce"
+	}
+}
+
+// wafMode returns the effective WAF mode: the persisted mode (set via
+// POST /v1/waf/mode) if present and valid, otherwise the env-configurable
+// boot default, which is enforce unless explicitly relaxed (A1-06).
 func (s *server) wafMode() string {
 	var v struct {
 		Mode string `json:"mode"`
 	}
-	if err := s.st.Get("config", "waf_mode", &v); err != nil || (v.Mode != "enforce" && v.Mode != "detect") {
-		return "detect"
+	if err := s.st.Get("config", "waf_mode", &v); err == nil && (v.Mode == "enforce" || v.Mode == "detect") {
+		return v.Mode
 	}
-	return v.Mode
+	return defaultWAFMode()
 }
 
 // wafUADenylist is the scanner/bot User-Agent blocklist applied to every
@@ -90,13 +106,52 @@ var wafUADenylist = []string{
 
 // wafServerlessLua is the serverless-pre-function body rendered in enforce
 // mode. It matches common SQLi (L1), XSS (L2) and path-traversal (L3)
-// signatures against the normalized URI + query args and short-circuits
-// with 403 before the request reaches any upstream.
+// signatures against the normalized URI + query args AND (A1-06) the raw
+// request body, short-circuiting with 403 before the request reaches any
+// upstream.
+//
+// Body-inspection limits (documented honestly):
+//   - Bodies are read with ngx.req.read_body() in the rewrite phase, which
+//     APISIX's serverless-pre-function supports (it wraps the function in
+//     _M[phase](conf, ctx) inside a full OpenResty request context, so the
+//     ngx.req API is available). The pcall guard fails CLOSED on runtime
+//     errors so a WAF malfunction never silently disables inspection.
+//   - Only bodies up to 32 KiB are inspected (larger bodies are flagged
+//     oversize and blocked — they are almost always file uploads, which
+//     these regex-class signatures cannot meaningfully inspect anyway).
+//   - Client-supplied bodies buffered to a temp file by nginx
+//     (client_body_buffer_size) return nil from get_body_data(); those are
+//     blocked as uninspectable rather than passed unchecked.
 const wafServerlessLua = `return function(conf, ctx)
 	local lower = string.lower
 	local uri = lower(ngx.unescape_uri(ngx.var.uri or ""))
 	local args = lower(ngx.unescape_uri(ngx.var.args or ""))
 	local target = uri .. "?" .. args
+	-- A1-06: inspect request bodies, not just URI/args. Bodies larger than
+	-- 32 KiB, or bodies nginx buffered to disk (uninspectable via
+	-- get_body_data), fail closed with 403 rather than bypassing the WAF.
+	local method = ngx.req.get_method()
+	if method == "POST" or method == "PUT" or method == "PATCH" then
+		local len = tonumber(ngx.var.content_length or "0") or 0
+		if len > 32768 then
+			ngx.log(ngx.WARN, "meridian-waf: blocked oversize body (", len, " bytes) — uninspectable")
+			ngx.exit(403)
+		end
+		local ok, err = pcall(ngx.req.read_body)
+		if not ok then
+			ngx.log(ngx.ERR, "meridian-waf: body read failed: ", err or "unknown")
+			ngx.exit(403)
+		end
+		local body = ngx.req.get_body_data()
+		if body == nil and len > 0 then
+			-- body buffered to temp file: cannot inspect — fail closed.
+			ngx.log(ngx.WARN, "meridian-waf: blocked disk-buffered body (uninspectable)")
+			ngx.exit(403)
+		end
+		if body ~= nil then
+			target = target .. " " .. lower(body)
+		end
+	end
 	local signatures = {
 		-- SQLi (L1)
 		"union%s+select", "select.+from.+information_schema",

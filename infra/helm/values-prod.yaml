@@ -63,6 +63,10 @@ services:
     autoscaling: {minReplicas: 4, maxReplicas: 40}
   edge-policy:
     autoscaling: {minReplicas: 4, maxReplicas: 40}
+    # A1-06: WAF blocks (not shadow) in prod. Enforce is the service default
+    # even without this var; it is pinned here so a stray dev overlay cannot
+    # relax prod. Dev shadowing requires explicit WAF_MODE=detect.
+    env: {WAF_MODE: "enforce", PROFILE: "prod"}
   feature-store:
     autoscaling: {minReplicas: 4, maxReplicas: 40}
   geo:
