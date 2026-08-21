@@ -330,6 +330,17 @@ class RefundExecutor:
                     resumed += 1
                 except Exception:  # noqa: BLE001
                     pass
+            elif pend is not None and pend.get("resolved") and pend.get("pending"):
+                # FF-3: the pending resolved as POSTED, not voided (posted
+                # pendings keep pending=true; voided ones flip pending=false).
+                # The money moved, so the refund is posted — never mark it
+                # "voided" merely because the post record was not resolvable
+                # under post_transfer_id (pre-fix HTTP ledger ignored post_id
+                # and exposed no single-transfer lookup).
+                exe["status"] = "posted"
+                exe["posted_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                self.store.put("refund_executions", exe["refund_id"], dict(exe))
+                resumed += 1
             else:
                 exe["status"] = "voided"
                 exe["fail_reason"] = "sweeper: pending missing or already resolved"
