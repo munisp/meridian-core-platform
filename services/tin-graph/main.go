@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
@@ -75,8 +76,12 @@ func loadMatchConfig() graph.MatchConfig {
 	return cfg
 }
 
+// packFetchClient bounds the dev pack-config fetch (QA-29): a bare http.Get
+// has no timeout and can hang the startup/load path indefinitely.
+var packFetchClient = &http.Client{Timeout: 10 * time.Second}
+
 func fetchPackConfig(url string) (*graph.MatchConfig, error) {
-	resp, err := http.Get(url) // dev only; prod goes through mTLS client
+	resp, err := packFetchClient.Get(url) // dev only; prod goes through mTLS client
 	if err != nil || resp.StatusCode != 200 {
 		return nil, err
 	}

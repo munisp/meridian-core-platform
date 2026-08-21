@@ -4,7 +4,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -87,6 +90,60 @@ func (l *LogSimulator) Send(m Message) SendResult {
 	return SendResult{ProviderID: fmt.Sprintf("logsim-%d-%d", time.Now().Unix(), l.seq)}
 }
 
+// WebhookProvider is the real dispatch path: POSTs each message as JSON to
+// the configured provider gateway (NOTIFY_PROVIDER_URL), which fronts the
+// actual SMS/email/push rails. A bounded http.Client is mandatory (QA-23).
+type WebhookProvider struct {
+	url    string
+	client *http.Client
+}
+
+// NewWebhookProvider creates the real provider pointed at url.
+func NewWebhookProvider(url string) *WebhookProvider {
+	return &WebhookProvider{url: url, client: &http.Client{Timeout: 10 * time.Second}}
+}
+
+// Name implements Provider.
+func (w *WebhookProvider) Name() string { return "webhook-gateway" }
+
+// Channels implements Provider.
+func (w *WebhookProvider) Channels() []string { return []string{"sms", "ussd", "email", "push"} }
+
+// Send implements Provider.
+func (w *WebhookProvider) Send(m Message) SendResult {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return SendResult{Err: err}
+	}
+	resp, err := w.client.Post(w.url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return SendResult{Err: err}
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 300 {
+		return SendResult{Err: fmt.Errorf("provider gateway returned %s", resp.Status)}
+	}
+	return SendResult{ProviderID: resp.Header.Get("X-Provider-Id")}
+}
+
+// providersFromEnv wires the provider set (QA-23, fail-closed in prod):
+//   - NOTIFY_PROVIDER_URL set -> the real webhook provider (prod contract)
+//   - PROFILE=prod without NOTIFY_PROVIDER_URL -> hard fatal: the service
+//     must never "send" regulated notifications to a log file in prod
+//   - otherwise (dev) -> LogSimulator
+func providersFromEnv(dir string) []Provider {
+	if u := os.Getenv("NOTIFY_PROVIDER_URL"); u != "" {
+		log.Printf("profile=prod component=notification-provider webhook-gateway url=%s", u)
+		return []Provider{NewWebhookProvider(u)}
+	}
+	if os.Getenv("PROFILE") == "prod" || os.Getenv("PROFILE") == "production" {
+		log.Fatal("PROFILE=prod FATAL: NOTIFY_PROVIDER_URL is required (refusing to boot with the LogSimulator as sole provider)")
+	}
+	log.Printf("profile=dev component=notification-provider (log simulator)")
+	return []Provider{NewLogSimulator(filepath.Join(dir, "notifications.log"))}
+}
+
 type server struct {
 	st        store.DocStore
 	providers []Provider
@@ -113,7 +170,7 @@ func main() {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	s := &server{st: st, providers: []Provider{NewLogSimulator(filepath.Join(dir, "notifications.log"))}}
+	s := &server{st: st, providers: providersFromEnv(dir)}
 	s.orch = newOrchestrator(s.providers)
 
 	mux := http.NewServeMux()
