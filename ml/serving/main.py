@@ -58,7 +58,24 @@ MODEL_REGISTRY_NAMES = {
 }
 
 AUTH_MODE = os.environ.get("AUTH_MODE", "dev")
+PROFILE = os.environ.get("PROFILE", "dev")
 DEV_SECRET = os.environ.get("MERIDIAN_DEV_JWT_SECRET", "meridian-dev-secret")
+
+
+def _validate_auth_config() -> None:
+    """A1-07: fail closed on misconfigured prod keycloak mode.
+
+    In PROFILE=prod with AUTH_MODE=keycloak, BOTH KEYCLOAK_AUDIENCE and
+    KEYCLOAK_ISSUER are mandatory: without audience/issuer pinning, any token
+    signed by any key in the realm JWKS (minted for any client) is accepted
+    (aud/iss confusion). Refuse to boot rather than serve unverified auth.
+    """
+    if AUTH_MODE == "keycloak" and PROFILE == "prod":
+        missing = [v for v in ("KEYCLOAK_AUDIENCE", "KEYCLOAK_ISSUER") if not os.environ.get(v)]
+        if missing:
+            raise RuntimeError(
+                "PROFILE=prod with AUTH_MODE=keycloak requires " + ", ".join(missing)
+            )
 
 
 # ---------------------------------------------------------------- auth -----
@@ -141,11 +158,22 @@ def _verify_keycloak(token: str) -> Optional[dict]:
     except ImportError:
         logger.warning("component=ml-serving PyJWT unavailable in keycloak mode; denying")
         return None
+    # A1-07: audience + issuer are pinned, never verify_aud=False. Without
+    # KEYCLOAK_AUDIENCE there is nothing to bind the token to this service —
+    # fail closed instead of accepting tokens minted for any realm client.
+    audience = os.environ.get("KEYCLOAK_AUDIENCE")
+    if not audience:
+        logger.warning("component=ml-serving keycloak mode but KEYCLOAK_AUDIENCE unset; denying")
+        return None
+    issuer = os.environ.get("KEYCLOAK_ISSUER")
     try:
         client = _jwks_client(jwks_url)
         key = client.get_signing_key_from_jwt(token).key
-        return jwt.decode(token, key, algorithms=["RS256"],
-                          options={"verify_aud": False})
+        options: dict[str, Any] = {"require": ["exp", "aud"]}
+        kwargs: dict[str, Any] = {"audience": audience}
+        if issuer:
+            kwargs["issuer"] = issuer
+        return jwt.decode(token, key, algorithms=["RS256"], options=options, **kwargs)
     except Exception as exc:
         logger.info("component=ml-serving keycloak verify failed: %s", exc)
         return None
@@ -296,6 +324,7 @@ class ModelStore:
 
 
 def create_app(registry_dir: Optional[str] = None) -> FastAPI:
+    _validate_auth_config()  # A1-07: prod keycloak mode requires aud+iss config
     registry = RegistryClient(registry_dir)
     store = ModelStore(registry)
     ab = ABRouter()
