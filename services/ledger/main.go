@@ -157,6 +157,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /v1/transfers/{id}/post", auth.RequireRole("ledger:post", s.postPending))
 	mux.HandleFunc("POST /v1/transfers/{id}/void", auth.RequireRole("ledger:post", s.voidPending))
 	mux.HandleFunc("GET /v1/transfers", s.listTransfers)
+	mux.HandleFunc("GET /v1/transfers/{id}", s.getTransfer)
 	return mux
 }
 
@@ -464,6 +465,11 @@ func (s *server) createPending(w http.ResponseWriter, r *http.Request) {
 type postReq struct {
 	AmountKobo uint64 `json:"amount_kobo,omitempty"` // 0 => full pending amount
 	Code       uint16 `json:"code,omitempty"`
+	// PostID lets the caller dictate the id the post transfer is recorded
+	// under (FF-3): callers that durably persist the post id before the
+	// crash window (e.g. the settlement refund executor) can look the post
+	// up afterwards via GET /v1/transfers/{post_id}.
+	PostID string `json:"post_id,omitempty"`
 }
 
 func (s *server) postPending(w http.ResponseWriter, r *http.Request) {
@@ -477,12 +483,42 @@ func (s *server) postPending(w http.ResponseWriter, r *http.Request) {
 	// TigerBeetle requires a post/void to reuse the pending transfer's own
 	// code; req.Code stays 0 unless the caller asserts a specific code, and
 	// the ledger client rejects a mismatch (PENDING_TRANSFER_HAS_DIFFERENT_CODE).
-	res, err := s.client.PostPending(id, req.AmountKobo, req.Code)
+	var res tb.Result
+	if req.PostID != "" {
+		postID, err := tb.ParseID(req.PostID)
+		if err != nil {
+			httpx.BadRequest(w, "invalid post_id: %v", err)
+			return
+		}
+		res, err = s.client.PostPendingAs(id, postID, req.AmountKobo, req.Code)
+	} else {
+		res, err = s.client.PostPending(id, req.AmountKobo, req.Code)
+	}
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
 	}
 	writeTransferResult(w, id, res)
+}
+
+// getTransfer returns a single transfer by id (FF-3): the settlement
+// refund sweeper resolves durable post/pending ids through this endpoint.
+func (s *server) getTransfer(w http.ResponseWriter, r *http.Request) {
+	id, err := tb.ParseID(r.PathValue("id"))
+	if err != nil {
+		httpx.BadRequest(w, "%v", err)
+		return
+	}
+	t, res, err := s.client.GetTransfer(id)
+	if err != nil {
+		httpx.Internal(w, "%v", err)
+		return
+	}
+	if res.Code != tb.OK {
+		httpx.NotFound(w, "transfer not found")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, t)
 }
 
 func (s *server) voidPending(w http.ResponseWriter, r *http.Request) {

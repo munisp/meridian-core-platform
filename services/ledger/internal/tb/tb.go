@@ -166,6 +166,12 @@ type LedgerClient interface {
 	Transfer(t Transfer) (Result, error)
 	PendingTransfer(t Transfer) (Result, error)
 	PostPending(pendingID ID, amount uint64, code uint16) (Result, error)
+	// PostPendingAs captures a pending transfer but records the post under a
+	// caller-supplied id (postID) instead of the pending's own id, so callers
+	// that durably recorded the post id before the crash window can look it
+	// up afterwards (FF-3). The pending transfer is marked resolved; code
+	// reuse rules are identical to PostPending.
+	PostPendingAs(pendingID, postID ID, amount uint64, code uint16) (Result, error)
 	VoidPending(pendingID ID, code uint16) (Result, error)
 	Balance(accountID ID) (Balance, Result, error)
 	GetAccount(id ID) (Account, Result, error)
@@ -453,6 +459,79 @@ func (c *DevClient) PostPending(pendingID ID, amount uint64, code uint16) (Resul
 		CreatedAt:       now(),
 	}
 	c.transfers[pendingID] = &post
+	c.changedLocked()
+	c.eventLocked(post)
+	return Result{Code: OK}, nil
+}
+
+// PostPendingAs captures a pending transfer like PostPending, but the post
+// transfer is recorded under the caller-supplied postID (FF-3) so a caller
+// that durably persisted the post id before posting can resolve it later.
+// The pending transfer record is kept and marked resolved (Pending stays
+// true to distinguish it from a voided record, which has Pending=false).
+// Repeating the call with the same postID is idempotent (Exists-OK when the
+// recorded post matches the same pending); a postID already used for an
+// unrelated transfer is rejected.
+func (c *DevClient) PostPendingAs(pendingID, postID ID, amount uint64, code uint16) (Result, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pt, ok := c.transfers[pendingID]
+	if !ok {
+		return Result{Code: PendingTransferNotFound}, nil
+	}
+	if !pt.Pending || pt.Resolved {
+		// Idempotent replay: already resolved and the post exists under
+		// postID for this pending -> report success.
+		if post, ok2 := c.transfers[postID]; ok2 && post.PendingID == pendingID && !post.Pending {
+			return Result{Code: OK}, nil
+		}
+		return Result{Code: PendingTransferNotPending}, nil
+	}
+	if code != 0 && code != pt.Code {
+		return Result{Code: PendingTransferHasDifferentAttr, Message: "code must match the pending transfer's code"}, nil
+	}
+	if existing, dup := c.transfers[postID]; dup {
+		if existing.PendingID == pendingID && !existing.Pending {
+			return Result{Code: OK}, nil // idempotent replay
+		}
+		return Result{Code: Exists, Message: "post id already in use"}, nil
+	}
+	if amount == 0 {
+		amount = pt.Amount
+	}
+	if amount > pt.Amount {
+		return Result{Code: ExceedsPendingAmount}, nil
+	}
+	dr := c.accounts[pt.DebitAccountID]
+	cr := c.accounts[pt.CreditAccountID]
+	dr.DebitsPending -= pt.Amount
+	cr.CreditsPending -= pt.Amount
+	if rc := checkConstraints(dr, 0, amount, 0, 0); rc != OK {
+		dr.DebitsPending += pt.Amount
+		cr.CreditsPending += pt.Amount
+		return Result{Code: rc, Message: "debit account"}, nil
+	}
+	if rc := checkConstraints(cr, 0, 0, 0, amount); rc != OK {
+		dr.DebitsPending += pt.Amount
+		cr.CreditsPending += pt.Amount
+		return Result{Code: rc, Message: "credit account"}, nil
+	}
+	dr.DebitsPosted += amount
+	cr.CreditsPosted += amount
+	pt.Resolved = true
+	post := Transfer{
+		ID:              postID,
+		DebitAccountID:  pt.DebitAccountID,
+		CreditAccountID: pt.CreditAccountID,
+		Amount:          amount,
+		Ledger:          pt.Ledger,
+		Code:            pt.Code,
+		Pending:         false,
+		PendingID:       pendingID,
+		UserData:        pt.UserData,
+		CreatedAt:       now(),
+	}
+	c.transfers[postID] = &post
 	c.changedLocked()
 	c.eventLocked(post)
 	return Result{Code: OK}, nil
