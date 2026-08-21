@@ -6,9 +6,11 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -58,8 +60,30 @@ type ConsumerPin struct {
 }
 
 type server struct {
-	st store.DocStore
+	st  store.DocStore
 	out outbox.Store
+	// signKeys pins the rule-pack ceremony ed25519 public keys (key_id ->
+	// pubkey), env-injected via RULEPACK_SIGNING_PUBKEYS (A1-09). prod is
+	// PROFILE=prod.
+	signKeys map[string]ed25519.PublicKey
+	prod     bool
+}
+
+// verifyPackOnWrite enforces the A1-09 signature policy at publish time:
+// any pack carrying a signed block is cryptographically verified when keys
+// are pinned (fail-closed on mismatch); in prod, packs registered or
+// published as status=published MUST carry a valid pinned-key signature.
+func (s *server) verifyPackOnWrite(pack *rpschema.Pack) error {
+	if pack.Signed == nil {
+		if s.prod && pack.Status == "published" {
+			return fmt.Errorf("PROFILE=prod refuses unsigned status=published pack (rule-injection guard, A1-09)")
+		}
+		if len(s.signKeys) == 0 {
+			return nil // dev without pinned keys: schema format check only
+		}
+		return fmt.Errorf("unsigned pack cannot be registered while signing keys are pinned (A1-09)")
+	}
+	return rpschema.VerifyPackSignature(pack, s.signKeys)
 }
 
 func key(id, ver string) string { return id + "@" + ver }
@@ -94,7 +118,18 @@ func main() {
 		log.Fatal(err)
 	}
 	defer ob.Close()
-	s := &server{st: st, out: ob}
+	// A1-09: pinned rule-pack signing keys. PROFILE=prod refuses to boot
+	// without them — registry store write access would otherwise allow
+	// arbitrary rule injection with only a format check on the signature.
+	signKeys, err := rpschema.ParseSigningKeys(httpx.Env("RULEPACK_SIGNING_PUBKEYS", ""))
+	if err != nil {
+		log.Fatalf("rp-registry: %v", err)
+	}
+	prod := httpx.Env("PROFILE", "dev") == "prod"
+	if prod && len(signKeys) == 0 {
+		log.Fatal("rp-registry: PROFILE=prod requires RULEPACK_SIGNING_PUBKEYS (env-injected pinned ed25519 keys); refusing to start (fail-closed, A1-09)")
+	}
+	s := &server{st: st, out: ob, signKeys: signKeys, prod: prod}
 
 	b := bus.NewFromEnv()
 	defer b.Close()
@@ -154,6 +189,16 @@ func (s *server) registerPack(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusUnprocessableEntity, map[string]any{
 			"type": "about:blank", "title": "pack_validation_failed", "status": 422,
 			"errors": msgs,
+		})
+		return
+	}
+	// A1-09: real ed25519 verification on publish (previously the signature
+	// was only format-checked — registry store write access meant arbitrary
+	// rule injection).
+	if err := s.verifyPackOnWrite(pack); err != nil {
+		httpx.JSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"type": "about:blank", "title": "pack_signature_invalid", "status": 422,
+			"errors": []string{err.Error()},
 		})
 		return
 	}
@@ -275,6 +320,20 @@ func (s *server) publishPack(w http.ResponseWriter, r *http.Request) {
 	case "retired":
 		httpx.Conflict(w, "pack %s is retired", k)
 		return
+	}
+	// A1-09: re-verify the pinned-key signature before promoting to
+	// published — a tampered store record must not be publishable. Verified
+	// against the pack AS REGISTERED (the signature covers the registered
+	// body; ceremony signs the final published form).
+	if rec.Signed != nil || s.prod {
+		pack := &rpschema.Pack{ID: rec.ID, Version: rec.Version, Status: rec.Status, Signed: rec.Signed, Raw: rec.Pack}
+		if err := s.verifyPackOnWrite(pack); err != nil {
+			httpx.JSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"type": "about:blank", "title": "pack_signature_invalid", "status": 422,
+				"errors": []string{err.Error()},
+			})
+			return
+		}
 	}
 	rec.Status = "published"
 	rec.PublishedAt = time.Now().UTC().Format(time.RFC3339)
