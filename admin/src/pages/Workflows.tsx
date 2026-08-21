@@ -1,8 +1,8 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, fmtTime } from '../api'
+import { api, errMsg, fmtTime } from '../api'
 import { WorkflowDef, WorkflowRun } from '../types'
-import { Badge, Modal, PageHeader } from '../components'
+import { Badge, ErrorBanner, Modal, PageHeader } from '../components'
 import Field from '../components/Field'
 
 export default function Workflows() {
@@ -12,10 +12,15 @@ export default function Workflows() {
   const [target, setTarget] = useState<WorkflowDef | null>(null)
   const [input, setInput] = useState('{}')
   const [msg, setMsg] = useState('')
+  const [loadErr, setLoadErr] = useState('')
 
   function load() {
-    api.get('/v1/admin/workflows').then((r) => setDefs(r.data.workflows || [])).catch(() => {})
-    api.get('/v1/admin/workflow-runs').then((r) => setRuns(r.data.runs || [])).catch(() => {})
+    setLoadErr('')
+    const errs: string[] = []
+    api.get('/v1/admin/workflows').then((r) => setDefs(r.data.workflows || []))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
+    api.get('/v1/admin/workflow-runs').then((r) => setRuns(r.data.runs || []))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
   }
   useEffect(load, [])
 
@@ -47,6 +52,7 @@ export default function Workflows() {
         sub={t('workflows.sub')}
       />
       {msg && <div role="status" className="mb-4 rounded-lg bg-success border border-brand-200 px-4 py-2.5 text-sm text-success-on">{msg}</div>}
+      {loadErr && <ErrorBanner message={loadErr} onRetry={load} />}
 
       {planes.map((plane) => (
         <section key={plane} className="mb-7">

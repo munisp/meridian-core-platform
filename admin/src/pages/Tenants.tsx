@@ -1,8 +1,8 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, fmtTime } from '../api'
+import { api, errMsg, fmtTime } from '../api'
 import { Tenant, User } from '../types'
-import { Badge, Modal, PageHeader } from '../components'
+import { Badge, ErrorBanner, Modal, PageHeader } from '../components'
 import Field from '../components/Field'
 
 interface Relation { object: string; relation: string; subject: string; plane: string }
@@ -62,6 +62,7 @@ export default function Tenants() {
         }
       />
       {msg && <div role="alert" className="mb-4 rounded-lg bg-danger border border-danger-strong px-4 py-2.5 text-sm text-danger-on">{msg}</div>}
+      {loadErr && <ErrorBanner message={loadErr} onRetry={load} />}
 
       <section className="mb-8">
         <h2 className="text-sm font-semibold text-stone-900 mb-3">{tr('tenants.tenantsTitle')}</h2>
@@ -174,6 +175,14 @@ export default function Tenants() {
           <Field label={tr('tenants.passwordDev')}>{(id) => <input id={id} className="input" value={uForm.password} onChange={(e) => setUForm({ ...uForm, password: e.target.value })} placeholder={tr('tenants.passwordPlaceholder')} />}</Field>
           <div className="flex justify-end gap-2">
             <button type="button" className="btn-secondary" onClick={() => setShowUser(false)}>{tr('tenants.cancel')}</button>
+            <button className="btn-primary">{tr('tenants.createUser')}</button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  )
+}
+lick={() => setShowUser(false)}>{tr('tenants.cancel')}</button>
             <button className="btn-primary">{tr('tenants.createUser')}</button>
           </div>
         </form>

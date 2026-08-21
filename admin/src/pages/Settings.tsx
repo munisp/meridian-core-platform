@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, fmtTime } from '../api'
-import { Badge, DevSeedTag, PageHeader } from '../components'
+import { api, errMsg, fmtTime } from '../api'
+import { Badge, DevSeedTag, ErrorBanner, PageHeader } from '../components'
 
 interface APIKey { id: string; name: string; prefix: string; scopes: string; created_at: string; revoked: boolean; secret_tail: string }
 interface NotifProvider { channel: string; provider: string; mode: string; status: string }
@@ -18,23 +18,35 @@ export default function Settings() {
   const [keyName, setKeyName] = useState('')
   const [secretOnce, setSecretOnce] = useState('')
   const [msg, setMsg] = useState('')
+  const [loadErr, setLoadErr] = useState('')
 
   function load() {
-    api.get('/v1/admin/settings/flags').then((r) => setFlags(r.data.flags || {})).catch(() => {})
-    api.get('/v1/admin/settings/api-keys').then((r) => setKeys(r.data.api_keys || [])).catch(() => {})
-    api.get('/v1/admin/settings/notifications').then((r) => setProviders(r.data.providers || [])).catch(() => {})
+    setLoadErr('')
+    const errs: string[] = []
+    api.get('/v1/admin/settings/flags').then((r) => setFlags(r.data.flags || {}))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
+    api.get('/v1/admin/settings/api-keys').then((r) => setKeys(r.data.api_keys || []))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
+    api.get('/v1/admin/settings/notifications').then((r) => setProviders(r.data.providers || []))
+      .catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
     api.get('/v1/admin/settings/routes').then((r) => {
       setRoutes(r.data.routes || [])
       setRouteSource(r.data.source)
       if (r.data.waf_mode) setWaf(r.data.waf_mode)
-    }).catch(() => {})
+    }).catch((e) => { errs.push(errMsg(e)); setLoadErr(errs.join(' · ')) })
   }
   useEffect(load, [])
 
   async function toggleFlag(k: string) {
     const next = { ...flags, [k]: !flags[k] }
     setFlags(next)
-    await api.put('/v1/admin/settings/flags', { flags: { [k]: next[k] } }).catch(() => {})
+    try {
+      await api.put('/v1/admin/settings/flags', { flags: { [k]: next[k] } })
+    } catch (e) {
+      // F-13: surface failed flag PUT — revert the optimistic toggle and show why.
+      setFlags(flags)
+      setLoadErr(errMsg(e))
+    }
   }
 
   async function setWAF(mode: string) {
@@ -64,6 +76,7 @@ export default function Settings() {
     <div>
       <PageHeader title={t('settings.title')} sub={t('settings.sub')} />
       {msg && <div role="status" className="mb-4 rounded-lg bg-success border border-brand-200 px-4 py-2.5 text-sm text-success-on">{msg}</div>}
+      {loadErr && <ErrorBanner message={loadErr} onRetry={load} />}
 
       <div className="grid lg:grid-cols-2 gap-6">
         <section className="card p-5">
