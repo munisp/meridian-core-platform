@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -33,12 +34,37 @@ func envOr(key, def string) string {
 	return def
 }
 
+func validateAuthConfig(authMode, jwtSecret string) error {
+	// A1-04: fail-closed prod gate (mirrors compliance authx.go:359-361).
+	// PROFILE=prod refuses AUTH_MODE=dev (or unset, which defaults to dev):
+	// the default HS256 secret and the X-Dev-Role header make auth fully
+	// forgeable. Prod must run AUTH_MODE=keycloak with an explicit audience.
+	if os.Getenv("PROFILE") == "prod" {
+		if authMode != "keycloak" {
+			return fmt.Errorf("PROFILE=prod refuses AUTH_MODE=%q; configure AUTH_MODE=keycloak (dev secret / X-Dev-Role auth is forgeable)", authMode)
+		}
+		if os.Getenv("KEYCLOAK_AUDIENCE") == "" {
+			return fmt.Errorf("PROFILE=prod requires KEYCLOAK_AUDIENCE (fail-closed)")
+		}
+	}
+	if authMode != "dev" && authMode != "keycloak" {
+		return fmt.Errorf("unknown AUTH_MODE %q", authMode)
+	}
+	if jwtSecret == "meridian-dev-secret-change-me" && os.Getenv("PROFILE") == "prod" {
+		return fmt.Errorf("PROFILE=prod refuses the default dev JWT secret")
+	}
+	return nil
+}
+
 func main() {
 	a := &app{
 		store:     NewStore(),
 		client:    &http.Client{Timeout: 1200 * time.Millisecond},
 		jwtSecret: envOr("MERIDIAN_DEV_JWT_SECRET", "meridian-dev-secret-change-me"),
 		authMode:  envOr("AUTH_MODE", "dev"),
+	}
+	if err := validateAuthConfig(a.authMode, a.jwtSecret); err != nil {
+		log.Fatalf("component=admin-api FATAL: %v", err)
 	}
 	// A6: Postgres-backed user persistence when DATABASE_URL is set.
 	if pg, err := openPgUsers(); err != nil {
@@ -116,15 +142,15 @@ func main() {
 	auth("GET /v1/admin/gazette-watch", a.handleGazetteWatch)
 
 	auth("GET /v1/admin/audit/events", a.handleAuditEvents)
-	auth("POST /v1/admin/audit/events", a.handleAuditAppend)
+	auth("POST /v1/admin/audit/events", a.requireRole("operator", a.handleAuditAppend)) // A1-11
 	auth("GET /v1/admin/evidence", a.handleEvidenceList)
 	auth("GET /v1/admin/evidence/{id}", a.handleEvidenceGet)
-	auth("POST /v1/admin/evidence", a.handleEvidenceCreate)
-	auth("POST /v1/admin/tat/assemble", a.handleTATAssemble)
+	auth("POST /v1/admin/evidence", a.requireRole("operator", a.handleEvidenceCreate)) // A1-11
+	auth("POST /v1/admin/tat/assemble", a.requireRole("admin", a.handleTATAssemble)) // A1-11
 
 	auth("GET /v1/admin/flows/matrix", a.handleFlowMatrix)
 	auth("GET /v1/admin/flows/receipts", a.handleFlowReceipts)
-	auth("POST /v1/admin/flows/receipts", a.handleFlowReceiptAppend)
+	auth("POST /v1/admin/flows/receipts", a.requireRole("operator", a.handleFlowReceiptAppend)) // A1-11
 	auth("GET /v1/admin/flows/forbidden", a.handleForbiddenFlows)
 
 	auth("GET /v1/admin/ledger/accounts", a.handleLedgerAccounts)
