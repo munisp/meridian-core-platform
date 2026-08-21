@@ -273,6 +273,51 @@ func (c *RealClient) PostPending(pendingID ID, amount uint64, code uint16) (Resu
 	return c.createOne(t)
 }
 
+// PostPendingAs captures a pending transfer like PostPending, but records
+// the post under the caller-supplied postID (FF-3) instead of deriving the
+// resolution id, so callers that durably persisted the post id can resolve
+// it afterwards. The code-reuse rule is identical to PostPending; a replay
+// with the same postID is idempotent at the TigerBeetle level (the cluster
+// returns EXISTS for an identical transfer, which we surface as OK).
+func (c *RealClient) PostPendingAs(pendingID, postID ID, amount uint64, code uint16) (Result, error) {
+	pend, err := c.lookupTransfer(pendingID)
+	if err != nil {
+		return Result{Code: PendingTransferNotFound}, nil
+	}
+	if code != 0 && code != pend.Code {
+		return Result{Code: PendingTransferHasDifferentAttr, Message: "code must match the pending transfer's code"}, nil
+	}
+	if amount == 0 {
+		pendAmt := pend.Amount.BigInt()
+		amount = pendAmt.Uint64()
+	}
+	t := tbtypes.Transfer{
+		ID:              idToU128(postID),
+		DebitAccountID:  pend.DebitAccountID,
+		CreditAccountID: pend.CreditAccountID,
+		Amount:          tbtypes.ToUint128(amount),
+		PendingID:       idToU128(pendingID),
+		Ledger:          pend.Ledger,
+		Code:            pend.Code,
+		Flags:           tbtypes.TransferFlags{PostPendingTransfer: true}.ToUint16(),
+	}
+	res, err := c.createOne(t)
+	if err != nil {
+		return res, err
+	}
+	if res.Code == Exists {
+		// Idempotent replay of the same post (same id + same attributes).
+		if prev, lerr := c.lookupTransfer(postID); lerr == nil &&
+			prev.PendingID == idToU128(pendingID) &&
+			prev.Code == pend.Code &&
+			func() bool { a := prev.Amount.BigInt(); return a.Uint64() == amount }() {
+			return Result{Code: OK}, nil
+		}
+		return Result{Code: ExistsWithDifferentAttributes, Message: "post id already in use"}, nil
+	}
+	return res, nil
+}
+
 // VoidPending voids/releases a pending transfer (void_pending_transfer).
 // The void must carry the pending transfer's code, exactly as PostPending.
 func (c *RealClient) VoidPending(pendingID ID, code uint16) (Result, error) {
