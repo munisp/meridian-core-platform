@@ -7,6 +7,20 @@ import (
 	"time"
 )
 
+// cloneUser deep-copies a User so callers can safely use the value after
+// releasing store.mu (FF-1: shared *User pointers were JSON-encoded after
+// unlock while handleUserUpdate mutated them in place).
+func cloneUser(u *User) *User {
+	if u == nil {
+		return nil
+	}
+	c := *u
+	if u.Roles != nil {
+		c.Roles = append([]string(nil), u.Roles...)
+	}
+	return &c
+}
+
 // ---------- login / me ----------
 
 type loginRequest struct {
@@ -21,6 +35,9 @@ func (a *app) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	a.store.mu.Lock()
 	u, ok := a.store.Users[req.Email]
+	if ok {
+		u = cloneUser(u) // copy under lock; safe to read after unlock
+	}
 	hash := ""
 	if ok {
 		hash = u.PasswordHash
@@ -215,7 +232,7 @@ func (a *app) handleUsers(w http.ResponseWriter, r *http.Request) {
 	a.store.mu.Lock()
 	out := make([]*User, 0, len(a.store.Users))
 	for _, u := range a.store.Users {
-		out = append(out, u)
+		out = append(out, cloneUser(u)) // copy values under lock (FF-1)
 	}
 	a.store.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Email < out[j].Email })
@@ -273,9 +290,14 @@ func (a *app) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	a.store.mu.Lock()
 	var target *User
-	for _, u := range a.store.Users {
+	var email string
+	for e, u := range a.store.Users {
 		if u.ID == r.PathValue("id") {
-			target = u
+			email = e
+			// FF-1: copy-on-write — never mutate a shared *User in place;
+			// build the updated copy and swap the map pointer atomically
+			// under the lock so readers never observe a half-updated user.
+			target = cloneUser(u)
 			break
 		}
 	}
@@ -284,7 +306,7 @@ func (a *app) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 			target.Name = in.Name
 		}
 		if len(in.Roles) > 0 {
-			target.Roles = in.Roles
+			target.Roles = append([]string(nil), in.Roles...)
 		}
 		if in.Status != "" {
 			target.Status = in.Status
@@ -295,6 +317,7 @@ func (a *app) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 		if in.Password != "" {
 			target.PasswordHash = MustHashPassword(in.Password)
 		}
+		a.store.Users[email] = target
 	}
 	if target != nil {
 		a.upsertUserPg(target)
