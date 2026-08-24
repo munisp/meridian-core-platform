@@ -213,3 +213,24 @@ func TestProdRefusesInMemoryOnlyAudit(t *testing.T) {
 		t.Fatalf("prod with AUDIT_EVIDENCE_URL must pass, got %v", err)
 	}
 }
+
+// V2 repair: with 1s granularity, `IssuedAt >= MinTokenIAT` let a token
+// minted in the SAME unix second as the credential change survive
+// revocation. The comparison is now strict (`>`); issuance guarantees a
+// fresh login token always satisfies it (iat = max(now, MinTokenIAT+1)).
+func TestSameSecondTokenDiesAfterEpochBump(t *testing.T) {
+	a := &app{store: NewStore(), authMode: "dev"}
+	u := a.store.Users["operator@meridian.local"]
+	now := time.Now().Unix()
+	// Token minted in the SAME second as the epoch bump must die.
+	a.store.mu.Lock()
+	u.MinTokenIAT = now
+	a.store.mu.Unlock()
+	if code := probeWithToken(a, issueToken(t, a, "operator@meridian.local", now)); code != http.StatusUnauthorized {
+		t.Fatalf("same-second token = %d, want 401 (strict > epoch)", code)
+	}
+	// A strictly-later token survives.
+	if code := probeWithToken(a, issueToken(t, a, "operator@meridian.local", now+1)); code != http.StatusOK {
+		t.Fatalf("later token = %d, want 200", code)
+	}
+}

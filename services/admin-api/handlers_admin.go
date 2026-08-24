@@ -49,13 +49,21 @@ func (a *app) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusUnauthorized, "invalid credentials", "email or password incorrect")
 		return
 	}
+	iat := time.Now().Unix()
+	// V2 repair: session revocation compares iat STRICTLY greater than
+	// MinTokenIAT (1s granularity). Guarantee a freshly issued token always
+	// satisfies it even when the epoch was bumped in the same second (e.g.
+	// re-login immediately after a password change).
+	if u.MinTokenIAT >= iat {
+		iat = u.MinTokenIAT + 1
+	}
 	c := claims{
 		Sub:      u.ID,
 		Email:    u.Email,
 		Roles:    u.Roles,
 		TenantID: u.TenantID,
 		Issuer:   "admin-api-dev",
-		IssuedAt: time.Now().Unix(),
+		IssuedAt: iat,
 		Expires:  time.Now().Add(12 * time.Hour).Unix(),
 	}
 	tok, err := a.issueJWT(c)

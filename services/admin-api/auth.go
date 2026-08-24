@@ -145,7 +145,11 @@ func (a *app) localSessionValid(c *claims) bool {
 	defer a.store.mu.Unlock()
 	for _, u := range a.store.Users {
 		if u.ID == c.Sub {
-			return u.Status == "active" && c.IssuedAt >= u.MinTokenIAT
+			// V2 repair: STRICT > — with 1s granularity, `>=` let a token
+			// minted in the SAME unix second as the credential change
+			// survive revocation. Issuance (handlers_admin.go) guarantees
+			// iat > MinTokenIAT for fresh tokens, so strictness is safe.
+			return u.Status == "active" && c.IssuedAt > u.MinTokenIAT
 		}
 	}
 	return false // deleted user: all sessions die immediately
