@@ -67,6 +67,7 @@ func TestMoneyMovementEndpointsRequireRoles(t *testing.T) {
 	h := testHandler()
 	aud := bearer(t, "auditor")
 	post := bearer(t, "ledger:post")
+	settle := bearer(t, "ledger:settle")
 
 	cases := []struct {
 		method, path, body, okRole string
@@ -74,8 +75,10 @@ func TestMoneyMovementEndpointsRequireRoles(t *testing.T) {
 		{"POST", "/v1/accounts", `{"namespace":100}`, "ledger:admin"},
 		{"POST", "/v1/transfers", `{}`, "ledger:post"},
 		{"POST", "/v1/transfers/pending", `{}`, "ledger:post"},
-		{"POST", "/v1/transfers/00000064000000000000000000000001/post", `{}`, "ledger:post"},
-		{"POST", "/v1/transfers/00000064000000000000000000000001/void", `{}`, "ledger:post"},
+		// B2-#12: settle/release are checker actions requiring the
+		// DISTINCT "ledger:settle" role; the maker role must be rejected.
+		{"POST", "/v1/transfers/00000064000000000000000000000001/post", `{}`, "ledger:settle"},
+		{"POST", "/v1/transfers/00000064000000000000000000000001/void", `{}`, "ledger:settle"},
 	}
 	for _, tc := range cases {
 		rec := doReq(t, h, tc.method, tc.path, aud, tc.body)
@@ -83,13 +86,25 @@ func TestMoneyMovementEndpointsRequireRoles(t *testing.T) {
 			t.Errorf("%s %s with auditor: got %d, want 403", tc.method, tc.path, rec.Code)
 		}
 		rec = doReq(t, h, tc.method, tc.path, post, tc.body)
-		if tc.okRole == "ledger:admin" {
+		switch tc.okRole {
+		case "ledger:admin":
 			// ledger:post alone must NOT create accounts
 			if rec.Code != http.StatusForbidden {
 				t.Errorf("%s %s with ledger:post only: got %d, want 403", tc.method, tc.path, rec.Code)
 			}
-		} else if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
-			t.Errorf("%s %s with %s: got %d, want handler to run", tc.method, tc.path, tc.okRole, rec.Code)
+		case "ledger:settle":
+			// maker role must NOT settle/void (maker != checker)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%s %s with ledger:post (maker): got %d, want 403", tc.method, tc.path, rec.Code)
+			}
+			rec = doReq(t, h, tc.method, tc.path, settle, tc.body)
+			if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+				t.Errorf("%s %s with ledger:settle: got %d, want handler to run", tc.method, tc.path, rec.Code)
+			}
+		default:
+			if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+				t.Errorf("%s %s with %s: got %d, want handler to run", tc.method, tc.path, tc.okRole, rec.Code)
+			}
 		}
 	}
 }
