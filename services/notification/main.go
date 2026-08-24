@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -221,11 +222,22 @@ func (s *server) send(w http.ResponseWriter, r *http.Request) {
 		httpx.BadRequest(w, "body or template_id required")
 		return
 	}
-	// idempotency: same key returns the original message
+	// idempotency: same key returns the original message. B4-14: fail-closed —
+	// if the lookup errors for any reason OTHER than not-found (store down,
+	// corrupt doc), refuse with 503 rather than risk a double-send of a
+	// regulated notification.
 	if req.IdempotencyKey != "" {
 		var existing Message
-		if err := s.st.Get("by_key", req.IdempotencyKey, &existing); err == nil {
+		err := s.st.Get("by_key", req.IdempotencyKey, &existing)
+		switch {
+		case err == nil:
 			httpx.JSON(w, http.StatusOK, map[string]any{"message": existing, "note": "idempotent replay"})
+			return
+		case !errors.Is(err, store.ErrNotFound):
+			httpx.JSON(w, http.StatusServiceUnavailable, map[string]any{
+				"type": "about:blank", "title": "idempotency_store_unavailable", "status": 503,
+				"detail": "idempotency lookup failed; refusing to risk duplicate send",
+			})
 			return
 		}
 	}
@@ -290,10 +302,19 @@ func (s *server) notify(w http.ResponseWriter, r *http.Request) {
 		httpx.BadRequest(w, "to and template_id are required")
 		return
 	}
+	// B4-14: same fail-closed idempotency semantics as /v1/send.
 	if req.IdempotencyKey != "" {
 		var existing Message
-		if err := s.st.Get("by_key", "notify:"+req.IdempotencyKey, &existing); err == nil {
+		err := s.st.Get("by_key", "notify:"+req.IdempotencyKey, &existing)
+		switch {
+		case err == nil:
 			httpx.JSON(w, http.StatusOK, map[string]any{"message": existing, "note": "idempotent replay"})
+			return
+		case !errors.Is(err, store.ErrNotFound):
+			httpx.JSON(w, http.StatusServiceUnavailable, map[string]any{
+				"type": "about:blank", "title": "idempotency_store_unavailable", "status": 503,
+				"detail": "idempotency lookup failed; refusing to risk duplicate send",
+			})
 			return
 		}
 	}
