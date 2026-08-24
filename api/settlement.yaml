@@ -3,7 +3,7 @@ info:
   title: Meridian Settlement API
   version: 1.0.0
   description: PSSP reconciliation runs, revenue event aggregation, fast-track refunds and break resolution (meridian-core-platform/services/settlement, FastAPI).
-servers: [ { url: http://localhost:8009 } ]
+servers: [ { url: http://localhost:8013 } ]
 paths:
   /healthz:
     get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }

@@ -6,7 +6,7 @@ info:
     Double-entry ledger (meridian-core-platform/services/ledger): TigerBeetle-style
     accounts and transfers incl. pending (two-phase) transfers. Amounts are kobo.
 servers:
-  - url: http://localhost:8002
+  - url: http://localhost:8010
 paths:
   /healthz:
     get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }

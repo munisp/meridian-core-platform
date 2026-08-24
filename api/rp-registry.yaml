@@ -3,7 +3,7 @@ info:
   title: Meridian Rule-Pack Registry API
   version: 1.0.0
   description: Signed rule-pack registry with semver versioning, board-gated publish and consumer staleness tracking (meridian-core-platform/services/rp-registry).
-servers: [ { url: http://localhost:8007 } ]
+servers: [ { url: http://localhost:8002 } ]
 paths:
   /healthz:
     get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }
