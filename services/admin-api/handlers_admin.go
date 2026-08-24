@@ -101,11 +101,17 @@ func (a *app) handleOverview(w http.ResponseWriter, r *http.Request) {
 	runs := len(a.store.WorkflowRuns)
 	a.store.mu.Unlock()
 
-	// try live counts from ledger/audit-evidence
+	// try live counts from ledger/audit-evidence. B4-8: the count is only
+	// labelled "live" when it was ACTUALLY read from the ledger service —
+	// pre-fix a successful GET /v1/accounts flipped the label while the
+	// number still came from the seeded admin store.
 	transferSource := "dev-seed"
 	if base, ok := a.serviceURL("ledger"); ok {
-		var live []map[string]any
-		if err := fetchJSON(a.client, base+"/v1/accounts", &live); err == nil {
+		var resp struct {
+			Transfers []map[string]any `json:"transfers"`
+		}
+		if err := fetchJSON(a.client, base+"/v1/transfers", &resp); err == nil {
+			transfers = len(resp.Transfers)
 			transferSource = "live"
 		}
 	}
