@@ -322,5 +322,12 @@ func (s *server) getReceipt(w http.ResponseWriter, r *http.Request) {
 		httpx.NotFound(w, "receipt %s", r.PathValue("id"))
 		return
 	}
+	// V2 repair: receipts were readable by ANY authenticated caller (IDOR).
+	// Only the receipt's subject or an admin may read it.
+	claims, ok := auth.FromContext(r.Context())
+	if !ok || (claims.Sub != receipt.Subject && !claims.HasRole("admin")) {
+		httpx.Errorf(w, http.StatusForbidden, "forbidden", "only the receipt subject or an admin may read a receipt")
+		return
+	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"receipt": receipt})
 }
