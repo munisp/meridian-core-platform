@@ -145,10 +145,20 @@ class HTTPLedger:
         self.base = base.rstrip("/")
 
     def _call(self, method: str, path: str, body: dict | None = None) -> dict:
+        # B3 #5: service-to-service auth. In prod the shared service token
+        # (MERIDIAN_SERVICE_TOKEN / LEDGER_SERVICE_TOKEN) is sent as
+        # X-Service-Token and validated fail-closed by the core ledger;
+        # the forgeable X-Dev-Role header is a dev-only fallback.
+        headers = {"Content-Type": "application/json", "X-Service-Name": "settlement"}
+        token = os.environ.get("MERIDIAN_SERVICE_TOKEN") or os.environ.get("LEDGER_SERVICE_TOKEN")
+        if token:
+            headers["X-Service-Token"] = token
+        else:
+            headers["X-Dev-Role"] = "operator"  # dev only
         req = urllib.request.Request(
             self.base + path, method=method,
             data=json.dumps(body).encode() if body is not None else None,
-            headers={"Content-Type": "application/json", "X-Dev-Role": "operator"})
+            headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             return json.loads(resp.read() or b"{}")
 

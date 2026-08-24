@@ -347,6 +347,12 @@ func SharedKeycloakVerifier() (*KeycloakVerifier, error) {
 // tokens must be valid RS256 Keycloak JWTs. X-Dev-Role is NOT accepted.
 func KeycloakMiddleware(next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// B3 #5: service-to-service callers authenticate with the shared
+		// service token instead of an end-user JWT.
+		if ServiceTokenValid(r) {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, ServiceClaims(r))))
+			return
+		}
 		authz := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authz, "Bearer ") {
 			httpx.Errorf(w, http.StatusUnauthorized, "unauthorized", "Bearer JWT required")
