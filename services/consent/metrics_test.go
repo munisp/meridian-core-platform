@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"github.com/munisp/meridian-core-platform/packages/events/store"
 )
@@ -21,10 +22,12 @@ func TestBusinessHandlerIncrementsMetrics(t *testing.T) {
 	s := &server{st: st, receiptKey: []byte("test-key")}
 	reg := &httpx.MetricsRegistry{}
 	mux := http.NewServeMux()
-	mux.Handle("POST /v1/consents", httpx.InstrumentRegistry(reg, http.HandlerFunc(s.create)))
+	// B2-#14: create is subject-bound, so the request must carry a principal.
+	mux.Handle("POST /v1/consents", auth.Middleware(httpx.InstrumentRegistry(reg, http.HandlerFunc(s.create))))
 
 	body := `{"subject":"tin-hash-9","purpose":"direct tax","lawful_basis":"consent"}`
 	req := httptest.NewRequest("POST", "/v1/consents", strings.NewReader(body))
+	req.Header.Set("Authorization", bearerFor(t, auth.Claims{Sub: "tin-hash-9"}))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
