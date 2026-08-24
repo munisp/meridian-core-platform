@@ -221,10 +221,15 @@ func ServiceTokenValid(r *http.Request) bool {
 }
 
 // ServiceClaims builds the principal for an authenticated service caller.
+// Service identities run full money sagas (hold -> post/void) server-side,
+// so they carry both the maker ("ledger:post") and checker
+// ("ledger:settle") ledger roles introduced by B2-#12 — the maker/checker
+// split constrains human/admin tokens, not service accounts whose sagas
+// are bound by deterministic idempotency keys.
 func ServiceClaims(r *http.Request) Claims {
 	return Claims{
 		Sub:      "service:" + r.Header.Get("X-Service-Name"),
-		Roles:    []string{"operator"},
+		Roles:    []string{"operator", "ledger:post", "ledger:settle"},
 		TenantID: r.Header.Get("X-Tenant-ID"),
 	}
 }
