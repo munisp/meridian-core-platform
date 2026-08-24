@@ -113,9 +113,9 @@ scrape_configs:
     static_configs:
       - targets: ["migration:8011"]
         labels: {instrumented: "false"}
-  - job_name: reg-watch            # services/reg-watch/app/main.py PORT default 8011 (collision with migration — fix port at deploy time)
+  - job_name: reg-watch            # services/reg-watch/app/main.py PORT default 8014
     static_configs:
-      - targets: ["reg-watch:8011"]
+      - targets: ["reg-watch:8014"]
         labels: {instrumented: "false"}
   - job_name: feature-store        # services/feature-store/app/main.py PORT default 8012
     static_configs:

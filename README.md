@@ -55,7 +55,7 @@ JWT with `MERIDIAN_DEV_JWT_SECRET`).
 | search-indexer | Go | 8008 | `/v1/search?q=`, `/v1/index` |
 | edge-policy | Go | 8009 | `/v1/routes` (APISIX YAML), WAF mode |
 | ledger | Go | 8010 | accounts, transfers, pending/post/void, balance |
-| reg-watch | Py | 8011 | gates + board flips, gazette watch |
+| reg-watch | Py | 8014 | gates + board flips, gazette watch |
 | feature-store | Py | 8012 | materialise, online, batch |
 | settlement | Py | 8013 | PSSP 3-way recon, breaks |
 | geo-rs | Rust | 8100 | same attribution surface (primary engine) |
