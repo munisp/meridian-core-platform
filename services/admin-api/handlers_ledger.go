@@ -5,12 +5,45 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 )
 
+// isProd mirrors the PROFILE=prod gates in main.go (A1-04).
+func isProd() bool { return os.Getenv("PROFILE") == "prod" }
+
 // ---------- ledger views (ledger svc with dev-seed fallback) ----------
 
+// B3 #14: the dev-seed in-memory ledger fallback is DEV ONLY. In prod
+// (PROFILE=prod) the console must never present or mutate a fake ledger:
+// when the real ledger is unreachable the handlers answer 502 instead of
+// silently serving dev-seed balances or writing audit rows for
+// transactions that never happened.
+func (a *app) ledgerFallbackAllowed() bool {
+	return !isProd()
+}
+
+func (a *app) ledgerUnavailable(w http.ResponseWriter) bool {
+	if a.ledgerFallbackAllowed() {
+		return false
+	}
+	writeProblem(w, http.StatusBadGateway, "ledger unavailable",
+		"core ledger svc unreachable; dev-seed in-memory fallback is disabled in prod (B3 #14)")
+	return true
+}
+
 func (a *app) handleLedgerAccounts(w http.ResponseWriter, r *http.Request) {
+	if base, ok := a.serviceURL("ledger"); ok {
+		var raw map[string]any
+		if err := fetchJSON(a.client, base+"/v1/accounts", &raw); err == nil {
+			raw["source"] = "live"
+			writeJSON(w, http.StatusOK, raw)
+			return
+		}
+	}
+	if a.ledgerUnavailable(w) {
+		return
+	}
 	a.store.mu.Lock()
 	out := make([]*LedgerAccount, 0, len(a.store.LedgerAccounts))
 	for _, ac := range a.store.LedgerAccounts {
@@ -30,6 +63,9 @@ func (a *app) handleLedgerBalance(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, raw)
 			return
 		}
+	}
+	if a.ledgerUnavailable(w) {
+		return
 	}
 	a.store.mu.Lock()
 	ac, ok := a.store.LedgerAccounts[id]
@@ -62,6 +98,9 @@ func (a *app) handleLedgerTransfer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if a.ledgerUnavailable(w) {
+		return
+	}
 	in.ID = newID("tr")
 	in.State = "pending"
 	in.Code = 1
@@ -82,6 +121,9 @@ func (a *app) settleTransfer(w http.ResponseWriter, r *http.Request, action stri
 			writeJSON(w, http.StatusOK, raw)
 			return
 		}
+	}
+	if a.ledgerUnavailable(w) {
+		return
 	}
 	a.store.mu.Lock()
 	tr, ok := a.store.LedgerTransfers[id]

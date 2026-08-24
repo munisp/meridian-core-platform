@@ -153,9 +153,13 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /v1/accounts", s.listAccounts)
 	mux.HandleFunc("GET /v1/accounts/{id}/balance", s.getBalance)
 	mux.HandleFunc("POST /v1/transfers", auth.RequireRole("ledger:post", s.createTransfer))
+	// B2-#12: maker/checker separation — pending creation (maker,
+	// "ledger:post") and settle/release (checker, "ledger:settle") require
+	// DISTINCT roles so a single compromised maker credential cannot both
+	// create and finalise a movement.
 	mux.HandleFunc("POST /v1/transfers/pending", auth.RequireRole("ledger:post", s.createPending))
-	mux.HandleFunc("POST /v1/transfers/{id}/post", auth.RequireRole("ledger:post", s.postPending))
-	mux.HandleFunc("POST /v1/transfers/{id}/void", auth.RequireRole("ledger:post", s.voidPending))
+	mux.HandleFunc("POST /v1/transfers/{id}/post", auth.RequireRole("ledger:settle", s.postPending))
+	mux.HandleFunc("POST /v1/transfers/{id}/void", auth.RequireRole("ledger:settle", s.voidPending))
 	mux.HandleFunc("GET /v1/transfers", s.listTransfers)
 	mux.HandleFunc("GET /v1/transfers/{id}", s.getTransfer)
 	return mux
