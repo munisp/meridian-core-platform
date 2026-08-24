@@ -184,6 +184,15 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		granted = *req.Granted
 	}
 	claims, _ := auth.FromContext(r.Context())
+	// B2-#14 (NDPA): the consent subject is bound to the caller's JWT
+	// principal — a caller may only capture consent for THEMSELVES;
+	// cross-subject capture requires the admin role (receipt records the
+	// admin actor, preserving the audit trail).
+	if req.Subject != claims.Sub && !claims.HasRole("admin") {
+		httpx.Errorf(w, http.StatusForbidden, "forbidden",
+			"subject must match the authenticated principal (cross-subject create requires admin)")
+		return
+	}
 	c := Consent{
 		ID:          "con-" + envelope.NewULID(),
 		Subject:     req.Subject,
@@ -210,6 +219,14 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) listBySubject(w http.ResponseWriter, r *http.Request) {
 	subject := r.PathValue("subject")
+	// B2-#14 (NDPA): listing is scoped to the caller's own subject;
+	// cross-subject reads require the admin role (IDOR fix).
+	claims, _ := auth.FromContext(r.Context())
+	if subject != claims.Sub && !claims.HasRole("admin") {
+		httpx.Errorf(w, http.StatusForbidden, "forbidden",
+			"only the data subject or an admin may list consents for %s", subject)
+		return
+	}
 	var all []Consent
 	if err := s.st.ListInto("consents", &all); err != nil {
 		httpx.Internal(w, "%v", err)
