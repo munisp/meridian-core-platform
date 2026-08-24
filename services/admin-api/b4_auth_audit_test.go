@@ -109,8 +109,10 @@ func TestRoleStatusChangeAndDeletionInvalidateSessions(t *testing.T) {
 	if code := probeWithToken(a, tok); code != http.StatusUnauthorized {
 		t.Fatalf("post-role-change token: want 401, got %d", code)
 	}
-	// a freshly minted token for the same (still active) user works
-	tok2 := issueToken(t, a, "auditor@meridian.local", time.Now().Unix())
+	// a freshly minted token for the same (still active) user works. The
+	// login path guarantees iat > MinTokenIAT (iat = max(now, epoch+1));
+	// simulate that here (V2 repair: strict > epoch comparison).
+	tok2 := issueToken(t, a, "auditor@meridian.local", time.Now().Unix()+1)
 	if code := probeWithToken(a, tok2); code != http.StatusOK {
 		t.Fatalf("fresh token: want 200, got %d", code)
 	}
