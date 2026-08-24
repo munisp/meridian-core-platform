@@ -108,6 +108,13 @@ func (a *app) requireAuth(next http.Handler) http.Handler {
 				writeProblem(w, http.StatusUnauthorized, "unauthorized", err.Error())
 				return
 			}
+			// B4-5: locally issued sessions are revocable — a token dies
+			// when its user is deleted/disabled or when the session epoch
+			// (MinTokenIAT) was bumped by a password/role/status change.
+			if kc == nil && !a.localSessionValid(c) {
+				writeProblem(w, http.StatusUnauthorized, "unauthorized", "session invalidated (credential or role changed)")
+				return
+			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxClaims, c)))
 			return
 		}
@@ -125,6 +132,27 @@ func (a *app) requireAuth(next http.Handler) http.Handler {
 func getClaims(r *http.Request) *claims {
 	c, _ := r.Context().Value(ctxClaims).(*claims)
 	return c
+}
+
+// localSessionValid enforces session revocation for admin-api-issued JWTs
+// (B4-5): the user must still exist and be active, and the token must have
+// been issued at/after the user's session epoch (MinTokenIAT).
+func (a *app) localSessionValid(c *claims) bool {
+	if c == nil || c.Issuer != "admin-api-dev" {
+		return true // tokens not issued by admin-api are unaffected here
+	}
+	a.store.mu.Lock()
+	defer a.store.mu.Unlock()
+	for _, u := range a.store.Users {
+		if u.ID == c.Sub {
+			// V2 repair: STRICT > — with 1s granularity, `>=` let a token
+			// minted in the SAME unix second as the credential change
+			// survive revocation. Issuance (handlers_admin.go) guarantees
+			// iat > MinTokenIAT for fresh tokens, so strictness is safe.
+			return u.Status == "active" && c.IssuedAt > u.MinTokenIAT
+		}
+	}
+	return false // deleted user: all sessions die immediately
 }
 
 func hasRole(c *claims, role string) bool {

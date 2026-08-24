@@ -25,6 +25,7 @@ func TestProdRefusesDevAuth(t *testing.T) {
 		t.Fatal("prod keycloak without KEYCLOAK_AUDIENCE must fail closed")
 	}
 	t.Setenv("KEYCLOAK_AUDIENCE", "nrs-api")
+	t.Setenv("AUDIT_EVIDENCE_URL", "https://audit-evidence.internal") // B4-6: prod requires the WORM sink
 	if err := validateAuthConfig("keycloak", "x"); err != nil {
 		t.Fatalf("prod keycloak properly configured: %v", err)
 	}

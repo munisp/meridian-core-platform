@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"os"
@@ -25,6 +26,10 @@ type app struct {
 	perm      *permifymodels.Client    // non-nil when PERMIFY_URL is configured (P0 authz)
 	wfRunner  sdkx.Runner              // env-selected workflow runner (temporal | dev-inproc)
 	wfExec    map[string]sdkx.Workflow // triggerable def id -> executable workflow
+	// B4-6: audit events that failed to reach the WORM audit-evidence
+	// service are queued and retried (never silently dropped).
+	auditMu    sync.Mutex
+	auditQueue []AuditEvent
 }
 
 func envOr(key, def string) string {
@@ -52,6 +57,12 @@ func validateAuthConfig(authMode, jwtSecret string) error {
 	}
 	if jwtSecret == "meridian-dev-secret-change-me" && os.Getenv("PROFILE") == "prod" {
 		return fmt.Errorf("PROFILE=prod refuses the default dev JWT secret")
+	}
+	// B4-6: prod must never run with the volatile in-memory audit trail as
+	// the only sink — every privileged mutation must reach the WORM
+	// audit-evidence service.
+	if os.Getenv("PROFILE") == "prod" && os.Getenv("AUDIT_EVIDENCE_URL") == "" {
+		return fmt.Errorf("PROFILE=prod requires AUDIT_EVIDENCE_URL (refusing in-memory-only audit mode)")
 	}
 	return nil
 }
@@ -103,6 +114,10 @@ func main() {
 	// Temporal worker wiring (docs/temporal-migration.md reference): executes
 	// triggerable workflow defs through the env-selected sdkx runner.
 	a.initWorkflows()
+
+	// B4-6: background retry of WORM audit forwards that failed (queued,
+	// never silently dropped).
+	go a.auditFlushLoop()
 
 	mux := http.NewServeMux()
 

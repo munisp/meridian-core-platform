@@ -49,13 +49,21 @@ func (a *app) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusUnauthorized, "invalid credentials", "email or password incorrect")
 		return
 	}
+	iat := time.Now().Unix()
+	// V2 repair: session revocation compares iat STRICTLY greater than
+	// MinTokenIAT (1s granularity). Guarantee a freshly issued token always
+	// satisfies it even when the epoch was bumped in the same second (e.g.
+	// re-login immediately after a password change).
+	if u.MinTokenIAT >= iat {
+		iat = u.MinTokenIAT + 1
+	}
 	c := claims{
 		Sub:      u.ID,
 		Email:    u.Email,
 		Roles:    u.Roles,
 		TenantID: u.TenantID,
 		Issuer:   "admin-api-dev",
-		IssuedAt: time.Now().Unix(),
+		IssuedAt: iat,
 		Expires:  time.Now().Add(12 * time.Hour).Unix(),
 	}
 	tok, err := a.issueJWT(c)
@@ -284,7 +292,15 @@ func (a *app) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
-	var in User
+	// B4-5: explicit password-change fields (User.Password is json:"-" and
+	// never binds). Setting a new password REQUIRES the account's current
+	// password (proof of current credential); password, role, or status
+	// changes bump the session epoch so previously issued JWTs die.
+	var in struct {
+		User
+		Password        string `json:"password"`
+		CurrentPassword string `json:"current_password"`
+	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
@@ -301,21 +317,37 @@ func (a *app) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	if target != nil && in.Password != "" {
+		if in.CurrentPassword == "" || !VerifyPassword(target.PasswordHash, in.CurrentPassword) {
+			a.store.mu.Unlock()
+			writeProblem(w, http.StatusForbidden, "current password required",
+				"changing the password requires the account's current password")
+			return
+		}
+	}
 	if target != nil {
+		bumpEpoch := false
 		if in.Name != "" {
 			target.Name = in.Name
 		}
-		if len(in.Roles) > 0 {
+		if len(in.Roles) > 0 && !equalStrings(in.Roles, target.Roles) {
 			target.Roles = append([]string(nil), in.Roles...)
+			bumpEpoch = true
 		}
-		if in.Status != "" {
+		if in.Status != "" && in.Status != target.Status {
 			target.Status = in.Status
+			bumpEpoch = true
 		}
 		if in.TenantID != "" {
 			target.TenantID = in.TenantID
 		}
 		if in.Password != "" {
 			target.PasswordHash = MustHashPassword(in.Password)
+			target.ForcePasswordReset = false
+			bumpEpoch = true
+		}
+		if bumpEpoch {
+			target.MinTokenIAT = time.Now().Unix()
 		}
 		a.store.Users[email] = target
 	}

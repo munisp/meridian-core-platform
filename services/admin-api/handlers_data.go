@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ---------- rule packs (rp-registry with dev-seed fallback) ----------
@@ -186,13 +190,123 @@ func (a *app) handleGazetteWatch(w http.ResponseWriter, r *http.Request) {
 
 // ---------- audit & WORM evidence ----------
 
+// appendAudit records a privileged mutation. The event is kept in the local
+// store (dev read-path fallback) AND forwarded to the WORM audit-evidence
+// service (B4-6): previously the in-mem slice was the only sink, so every
+// admin-plane mutation vanished on restart and never reached the immutable
+// trail that the live read path queries. Forward failures are queued and
+// retried (auditFlushLoop) — never silently dropped.
 func (a *app) appendAudit(typ, subject, actor, action, detail string) {
-	a.store.mu.Lock()
-	defer a.store.mu.Unlock()
-	a.store.AuditEvents = append([]AuditEvent{{
+	ev := AuditEvent{
 		ID: newID("ae"), Type: typ, Subject: subject, Actor: actor,
 		Action: action, Detail: detail, Timestamp: nowRFC3339(),
-	}}, a.store.AuditEvents...)
+	}
+	a.store.mu.Lock()
+	a.store.AuditEvents = append([]AuditEvent{ev}, a.store.AuditEvents...)
+	a.store.mu.Unlock()
+	a.forwardAudit(ev)
+}
+
+// forwardAudit posts one event to the audit-evidence WORM store; on failure
+// it queues the event for retry. audit-evidence attributes the event to the
+// authenticated principal itself, so the human actor travels in details.
+func (a *app) forwardAudit(ev AuditEvent) {
+	if err := a.postAuditEvent(ev); err != nil {
+		log.Printf("component=admin-api audit WORM forward FAILED (%v); queued for retry (queue depth grows until audit-evidence recovers)", err)
+		a.auditMu.Lock()
+		a.auditQueue = append(a.auditQueue, ev)
+		a.auditMu.Unlock()
+	}
+}
+
+// postAuditEvent performs a single delivery attempt to audit-evidence.
+func (a *app) postAuditEvent(ev AuditEvent) error {
+	base, ok := a.serviceURL("audit-evidence")
+	if !ok || base == "" {
+		return errString("audit-evidence service URL not configured")
+	}
+	payload := map[string]any{
+		"subject": ev.Subject,
+		"action":  ev.Action,
+		"type":    ev.Type,
+		"details": map[string]any{
+			"actor":  ev.Actor,
+			"detail": ev.Detail,
+			"id":     ev.ID,
+			"ts":     ev.Timestamp,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, base+"/v1/audit/events", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if a.authMode == "dev" {
+		// dev shared-secret auth; audit-evidence attributes the event to the
+		// service principal and keeps the human actor in details.
+		req.Header.Set("X-Dev-Role", "admin")
+	}
+	resp, err := a.httpClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 300 {
+		return errString("audit-evidence returned " + resp.Status)
+	}
+	return nil
+}
+
+// httpClient returns the downstream client (nil-safe for bare test apps).
+func (a *app) httpClient() *http.Client {
+	if a.client != nil {
+		return a.client
+	}
+	return &http.Client{Timeout: 5 * time.Second}
+}
+
+// auditFlushLoop retries queued WORM forwards until they land.
+func (a *app) auditFlushLoop() {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for range t.C {
+		a.flushAuditQueue()
+	}
+}
+
+// flushAuditQueue attempts one delivery per queued event; events that still
+// fail remain queued (order preserved).
+func (a *app) flushAuditQueue() {
+	a.auditMu.Lock()
+	pending := append([]AuditEvent(nil), a.auditQueue...)
+	a.auditQueue = nil
+	a.auditMu.Unlock()
+	if len(pending) == 0 {
+		return
+	}
+	var still []AuditEvent
+	for _, ev := range pending {
+		if err := a.postAuditEvent(ev); err != nil {
+			still = append(still, ev)
+		}
+	}
+	if len(still) > 0 {
+		a.auditMu.Lock()
+		a.auditQueue = append(still, a.auditQueue...)
+		a.auditMu.Unlock()
+	}
+}
+
+// auditQueueDepth exposes the pending-forward depth (tests + metrics).
+func (a *app) auditQueueDepth() int {
+	a.auditMu.Lock()
+	defer a.auditMu.Unlock()
+	return len(a.auditQueue)
 }
 
 func (a *app) handleAuditEvents(w http.ResponseWriter, r *http.Request) {

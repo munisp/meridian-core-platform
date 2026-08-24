@@ -28,6 +28,11 @@ type User struct {
 	// ForcePasswordReset is set when a dev-created user got a generated
 	// one-off password; the console should force a reset on first login.
 	ForcePasswordReset bool `json:"force_password_reset,omitempty"`
+	// MinTokenIAT invalidates every session JWT issued before this Unix
+	// time (B4-5): bumped on password, role, or status change; a deleted
+	// user's tokens die because the user no longer resolves at verify time.
+	// Persisted (pg doc) so restarts do not resurrect revoked sessions.
+	MinTokenIAT int64 `json:"min_token_iat,omitempty"`
 }
 
 type Relation struct {
