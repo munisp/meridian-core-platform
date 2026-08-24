@@ -338,12 +338,13 @@ def revenue_aggregate(group_by: str = "tax_type",
 # ---------------------------------------------------------------------------
 
 class FastTrackRequest(BaseModel):
+    # B3 #1: the refund lane is decided on SERVER-SIDE credit/compliance
+    # data only. Caller-supplied credit_score / filings_on_time /
+    # filings_total / prior_breaks are rejected (extra=forbid) — a caller
+    # must never self-certify the trust inputs to an auto-execution.
+    model_config = {"extra": "forbid"}
     tin_hash: str
     amount_kobo: int
-    credit_score: int = Field(ge=0, le=1000)
-    filings_on_time: int = Field(default=0, ge=0)
-    filings_total: int = Field(default=0, ge=0)
-    prior_breaks: int = Field(default=0, ge=0)
     tax_type: str | None = None
     period: str | None = None  # e.g. "2026-07"; defaults to the current month
 
@@ -395,11 +396,18 @@ def refund_fasttrack(req: FastTrackRequest,
                 _store.put("refund_decisions", rid, prior)
         return {**prior, "idempotent_replay": True}
     server_breaks = sum(1 for b in _store.list("breaks") if b.get("status") == "open")
+    # B3 #1: credit score and filing history are read from the platform's
+    # server-side taxpayer profile store (populated by compliance/filing
+    # pipelines), keyed by tin_hash. Absent a profile the decision fails
+    # closed — auto_approve is unreachable.
+    profile = _store.get("taxpayer_credit_profiles", req.tin_hash) or {}
     try:
         doc = decide_refund_lane(
             tin_hash=req.tin_hash, amount_kobo=req.amount_kobo,
-            credit_score=req.credit_score, filings_on_time=req.filings_on_time,
-            filings_total=req.filings_total, prior_breaks=server_breaks,
+            credit_score=profile.get("credit_score"),
+            filings_on_time=profile.get("filings_on_time"),
+            filings_total=profile.get("filings_total"),
+            prior_breaks=server_breaks,
             tax_type=req.tax_type)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
