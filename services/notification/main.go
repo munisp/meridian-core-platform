@@ -350,7 +350,16 @@ func (s *server) notify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.IdempotencyKey != "" {
-		_ = s.st.Put("by_key", "notify:"+req.IdempotencyKey, msg)
+		// V2 repair: the post-send by_key Put error was swallowed, so a
+		// retry of this idempotency key would double-send (the record that
+		// makes the send idempotent never landed). Log loudly and surface
+		// the failure honestly instead of claiming a clean accepted send.
+		if err := s.st.Put("by_key", "notify:"+req.IdempotencyKey, msg); err != nil {
+			log.Printf("notification by_key Put FAILED for key %q (msg %s already sent; retry of this key may double-send): %v",
+				req.IdempotencyKey, msg.ID, err)
+			httpx.Internal(w, "notification sent but idempotency record failed: %v", err)
+			return
+		}
 	}
 	status := http.StatusAccepted
 	if msg.Status == "failed" {
