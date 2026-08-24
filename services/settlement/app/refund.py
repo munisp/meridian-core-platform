@@ -27,12 +27,22 @@ def compliance_ratio(filings_on_time: int, filings_total: int) -> float:
     return min(max(filings_on_time / filings_total, 0.0), 1.0)
 
 
-def decide_refund_lane(tin_hash: str, amount_kobo: int, credit_score: int,
-                       filings_on_time: int, filings_total: int,
+def decide_refund_lane(tin_hash: str, amount_kobo: int, credit_score: int | None,
+                       filings_on_time: int | None, filings_total: int | None,
                        prior_breaks: int = 0, tax_type: str | None = None) -> dict:
-    """Pure decision function — returns the lane decision document."""
+    """Pure decision function — returns the lane decision document.
+
+    B3 #1: credit_score/filings_* must come from SERVER-SIDE platform
+    stores; None means "no server-side profile available" and fails
+    closed — auto_approve is unreachable without verified data."""
     if amount_kobo <= 0:
         raise ValueError("amount_kobo must be positive")
+    server_data = (credit_score is not None and filings_on_time is not None
+                   and filings_total is not None)
+    if not server_data:
+        credit_score = 0
+        filings_on_time = 0
+        filings_total = 0
     ratio = compliance_ratio(filings_on_time, filings_total)
     reasons: list[str] = []
 
@@ -44,7 +54,16 @@ def decide_refund_lane(tin_hash: str, amount_kobo: int, credit_score: int,
         "compliance_auto": ratio >= AUTO_MIN_COMPLIANCE,
         "no_open_breaks": prior_breaks == 0,
     }
-    if (checks["amount_within_auto_cap"] and checks["credit_score_auto"]
+    if not server_data:
+        # Fail closed: without a server-side credit/compliance profile the
+        # caller's history is unknown, so the fastest lane reachable is
+        # manual_review (never auto_approve).
+        lane = "manual_review" if checks["amount_within_review_cap"] else "standard"
+        reasons.append("no server-side credit/compliance profile for this TIN; "
+                       "failing closed to manual review")
+        if not checks["amount_within_review_cap"]:
+            reasons.append(f"amount above ₦{REVIEW_MAX_KOBO // 100:,} review cap")
+    elif (checks["amount_within_auto_cap"] and checks["credit_score_auto"]
             and checks["compliance_auto"] and checks["no_open_breaks"]):
         lane = "auto_approve"
         reasons.append(f"score {credit_score} >= {AUTO_MIN_SCORE}, compliance {ratio:.2f} >= "

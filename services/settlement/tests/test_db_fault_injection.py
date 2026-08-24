@@ -32,8 +32,11 @@ class SimulatedDeadlock(Exception):
 
 
 def _req(tin, amount=300_000_000, period="2026-08"):
-    return {"tin_hash": tin, "amount_kobo": amount, "credit_score": 800,
-            "filings_on_time": 12, "filings_total": 12, "tax_type": "vat",
+    # B3 #1: lane inputs are server-side; seed the platform profile store.
+    _store.put("taxpayer_credit_profiles", tin, {
+        "tin_hash": tin, "credit_score": 800,
+        "filings_on_time": 12, "filings_total": 12})
+    return {"tin_hash": tin, "amount_kobo": amount, "tax_type": "vat",
             "period": period}
 
 

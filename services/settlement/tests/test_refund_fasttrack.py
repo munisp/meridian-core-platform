@@ -40,13 +40,19 @@ def test_standard_lane_low_score_and_big_amount():
 
 
 def test_endpoint_and_manual_review_event():
+    from app.main import _store
+    # B3 #1: credit/filing inputs are server-side only; seed the profile store.
+    _store.put("taxpayer_credit_profiles", "tin-x", {
+        "tin_hash": "tin-x", "credit_score": 800,
+        "filings_on_time": 12, "filings_total": 12})
+    _store.put("taxpayer_credit_profiles", "tin-y", {
+        "tin_hash": "tin-y", "credit_score": 750,
+        "filings_on_time": 10, "filings_total": 10})
     with TestClient(app) as c:
         r = c.post("/v1/refunds/fasttrack", headers=H, json={
-            "tin_hash": "tin-x", "amount_kobo": 1_200_000_000, "credit_score": 800,
-            "filings_on_time": 12, "filings_total": 12, "tax_type": "vat"})
+            "tin_hash": "tin-x", "amount_kobo": 1_200_000_000, "tax_type": "vat"})
         assert r.status_code == 200, r.text
         assert r.json()["lane"] == "manual_review"
         r = c.post("/v1/refunds/fasttrack", headers=H, json={
-            "tin_hash": "tin-y", "amount_kobo": 100_000_000, "credit_score": 750,
-            "filings_on_time": 10, "filings_total": 10})
+            "tin_hash": "tin-y", "amount_kobo": 100_000_000})
         assert r.json()["lane"] == "auto_approve"
