@@ -61,6 +61,20 @@ func newID(prefix string) string {
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
 
+// equalStrings reports whether two string slices hold the same elements in
+// the same order.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // ---------- passwords ----------
 
 // generatePassword returns a cryptographically random password (24 chars,
