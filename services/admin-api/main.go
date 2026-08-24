@@ -170,9 +170,12 @@ func main() {
 
 	auth("GET /v1/admin/ledger/accounts", a.handleLedgerAccounts)
 	auth("GET /v1/admin/ledger/accounts/{id}/balance", a.handleLedgerBalance)
+	// B2-#11: maker/checker separation on ledger money routes — the maker
+	// (operator) creates a pending transfer; only a distinct checker role
+	// (admin) may post or void it. Same-role maker+checker is rejected.
 	auth("POST /v1/admin/ledger/transfers", a.requireRole("operator", a.handleLedgerTransfer))
-	auth("POST /v1/admin/ledger/transfers/{id}/post", a.requireRole("operator", a.handleLedgerPost))
-	auth("POST /v1/admin/ledger/transfers/{id}/void", a.requireRole("operator", a.handleLedgerVoid))
+	auth("POST /v1/admin/ledger/transfers/{id}/post", a.requireRole("admin", a.handleLedgerPost))
+	auth("POST /v1/admin/ledger/transfers/{id}/void", a.requireRole("admin", a.handleLedgerVoid))
 	auth("GET /v1/admin/ledger/recon-breaks", a.handleReconBreaks)
 
 	auth("GET /v1/admin/workflows", a.handleWorkflows)

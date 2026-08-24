@@ -200,3 +200,79 @@ func withCORS(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// fetchJSONToken / postJSONToken are the ledger-call variants carrying a
+// DISTINCT env-injected service token (B2-#12 repair): the maker token
+// (MERIDIAN_LEDGER_MAKER_TOKEN / LEDGER_MAKER_TOKEN, ledger:post only) for
+// reads and pending-create; the settle token (MERIDIAN_LEDGER_SETTLE_TOKEN
+// / LEDGER_SETTLE_TOKEN, ledger:settle only) for post/void. An empty token
+// sends no header (dev profile).
+func serviceToken(names ...string) string {
+	for _, n := range names {
+		if v := os.Getenv(n); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func makerServiceToken() string {
+	return serviceToken("MERIDIAN_LEDGER_MAKER_TOKEN", "LEDGER_MAKER_TOKEN")
+}
+
+func settleServiceToken() string {
+	return serviceToken("MERIDIAN_LEDGER_SETTLE_TOKEN", "LEDGER_SETTLE_TOKEN")
+}
+
+func fetchJSONToken(client *http.Client, url, token string, out any) error {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("X-Service-Token", token)
+		req.Header.Set("X-Service-Name", "admin-api")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("downstream %s returned %d", url, resp.StatusCode)
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
+}
+
+func postJSONToken(client *http.Client, url, token string, body any, out any) error {
+	var rdr io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		rdr = strings.NewReader(string(b))
+	}
+	req, err := http.NewRequest(http.MethodPost, url, rdr)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("X-Service-Token", token)
+		req.Header.Set("X-Service-Name", "admin-api")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("downstream %s returned %d: %s", url, resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
+}

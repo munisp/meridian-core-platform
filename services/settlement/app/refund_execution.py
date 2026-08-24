@@ -139,20 +139,28 @@ class InprocLedger:
 
 
 class HTTPLedger:
-    """Core ledger REST service client (prod profile; LEDGER_URL)."""
+    """Core ledger REST service client (prod profile; LEDGER_URL).
+
+    B2-#12 repair (V2 round): service-to-service auth uses DISTINCT
+    maker/checker tokens. The maker token (MERIDIAN_LEDGER_MAKER_TOKEN /
+    LEDGER_MAKER_TOKEN) grants ledger:post only and is sent on
+    pending-create; the settle token (MERIDIAN_LEDGER_SETTLE_TOKEN /
+    LEDGER_SETTLE_TOKEN) grants ledger:settle only and is sent on
+    post/void. No single token runs the full hold->settle saga. The
+    forgeable X-Dev-Role header is a dev-only fallback when no token is
+    configured.
+    """
 
     def __init__(self, base: str) -> None:
         self.base = base.rstrip("/")
+        self.maker_token = os.environ.get("MERIDIAN_LEDGER_MAKER_TOKEN") or os.environ.get("LEDGER_MAKER_TOKEN")
+        self.settle_token = os.environ.get("MERIDIAN_LEDGER_SETTLE_TOKEN") or os.environ.get("LEDGER_SETTLE_TOKEN")
 
-    def _call(self, method: str, path: str, body: dict | None = None) -> dict:
-        # B3 #5: service-to-service auth. In prod the shared service token
-        # (MERIDIAN_SERVICE_TOKEN / LEDGER_SERVICE_TOKEN) is sent as
-        # X-Service-Token and validated fail-closed by the core ledger;
-        # the forgeable X-Dev-Role header is a dev-only fallback.
+    def _call(self, method: str, path: str, body: dict | None = None,
+              service_token: str | None = None) -> dict:
         headers = {"Content-Type": "application/json", "X-Service-Name": "settlement"}
-        token = os.environ.get("MERIDIAN_SERVICE_TOKEN") or os.environ.get("LEDGER_SERVICE_TOKEN")
-        if token:
-            headers["X-Service-Token"] = token
+        if service_token:
+            headers["X-Service-Token"] = service_token
         else:
             headers["X-Dev-Role"] = "operator"  # dev only
         req = urllib.request.Request(
@@ -171,14 +179,16 @@ class HTTPLedger:
         self._call("POST", "/v1/transfers/pending", {
             "id": t["id"], "debit_account_id": t["debit"], "credit_account_id": t["credit"],
             "amount_kobo": t["amount_kobo"], "ledger": REFUND_LEDGER, "code": t.get("code", 1),
-            "timeout_seconds": t.get("timeout_seconds", 0)})
+            "timeout_seconds": t.get("timeout_seconds", 0)}, service_token=self.maker_token)
 
     def post_pending_as(self, pending_id: str, post_id: str, amount: int) -> None:
         self._call("POST", f"/v1/transfers/{pending_id}/post",
-                   {"amount_kobo": amount, "post_id": post_id})
+                   {"amount_kobo": amount, "post_id": post_id},
+                   service_token=self.settle_token)
 
     def void_pending(self, pending_id: str) -> None:
-        self._call("POST", f"/v1/transfers/{pending_id}/void")
+        self._call("POST", f"/v1/transfers/{pending_id}/void",
+                   service_token=self.settle_token)
 
     def get_transfer(self, transfer_id: str) -> dict | None:
         try:

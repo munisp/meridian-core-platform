@@ -6,60 +6,85 @@ import (
 	"testing"
 )
 
-// B3 #5 regression: money services must be able to authenticate to the
-// core ledger in prod without the forgeable X-Dev-Role header.
+// Regression (B2-#12 repair, V2 round): the previous shared service token
+// granted ONE identity BOTH the maker ("ledger:post") and checker
+// ("ledger:settle") roles, so a single stolen service token ran the full
+// hold->settle saga and maker/checker SoD never constrained the machine
+// path. Now maker and settle tokens are DISTINCT env-injected secrets and
+// no token carries both roles.
 
-func okHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
+func svcReq(token string) *http.Request {
+	r := httptest.NewRequest("POST", "/v1/transfers/pending", nil)
+	r.Header.Set("X-Service-Token", token)
+	r.Header.Set("X-Service-Name", "settlement")
+	return r
 }
 
-func TestServiceTokenAcceptedInDevAndKeycloakModes(t *testing.T) {
-	t.Setenv("MERIDIAN_SERVICE_TOKEN", "s3cret-service-token")
-	t.Setenv("AUTH_MODE", "dev")
-	h := Middleware(okHandler())
-	req := httptest.NewRequest("GET", "/v1/transfers", nil)
-	req.Header.Set("X-Service-Token", "s3cret-service-token")
-	req.Header.Set("X-Service-Name", "pos-vat")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("valid service token rejected: %d", rec.Code)
+func TestServiceTokens_DistinctMakerAndChecker(t *testing.T) {
+	t.Setenv("MERIDIAN_LEDGER_MAKER_TOKEN", "maker-secret")
+	t.Setenv("MERIDIAN_LEDGER_SETTLE_TOKEN", "settle-secret")
+
+	mk, ok := ServiceClaims(svcReq("maker-secret"))
+	if !ok {
+		t.Fatal("maker token not honoured")
+	}
+	if !mk.HasRole("ledger:post") || mk.HasRole("ledger:settle") {
+		t.Fatalf("maker token roles = %v, want [ledger:post] only", mk.Roles)
 	}
 
-	// wrong token -> 401
-	req = httptest.NewRequest("GET", "/v1/transfers", nil)
-	req.Header.Set("X-Service-Token", "wrong")
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong service token must be 401, got %d", rec.Code)
+	st, ok := ServiceClaims(svcReq("settle-secret"))
+	if !ok {
+		t.Fatal("settle token not honoured")
 	}
-}
-
-func TestServiceTokenNotHonouredWhenUnconfigured(t *testing.T) {
-	// no MERIDIAN_SERVICE_TOKEN / LEDGER_SERVICE_TOKEN: header never honoured
-	t.Setenv("AUTH_MODE", "dev")
-	h := Middleware(okHandler())
-	req := httptest.NewRequest("GET", "/v1/transfers", nil)
-	req.Header.Set("X-Service-Token", "anything")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code == http.StatusNoContent {
-		t.Fatal("service token honoured with none configured (fail-open)")
+	if !st.HasRole("ledger:settle") || st.HasRole("ledger:post") {
+		t.Fatalf("settle token roles = %v, want [ledger:settle] only", st.Roles)
 	}
 }
 
-func TestServiceTokenFallbackEnvName(t *testing.T) {
-	t.Setenv("LEDGER_SERVICE_TOKEN", "ledger-only-token")
-	t.Setenv("AUTH_MODE", "dev")
-	h := Middleware(okHandler())
-	req := httptest.NewRequest("GET", "/v1/transfers", nil)
-	req.Header.Set("X-Service-Token", "ledger-only-token")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("LEDGER_SERVICE_TOKEN fallback not honoured: %d", rec.Code)
+func TestServiceTokens_NoTokenCarriesBothRoles(t *testing.T) {
+	t.Setenv("MERIDIAN_LEDGER_MAKER_TOKEN", "maker-secret")
+	t.Setenv("MERIDIAN_LEDGER_SETTLE_TOKEN", "settle-secret")
+	for _, tok := range []string{"maker-secret", "settle-secret"} {
+		c, ok := ServiceClaims(svcReq(tok))
+		if !ok {
+			t.Fatalf("token %q not honoured", tok)
+		}
+		if c.HasRole("ledger:post") && c.HasRole("ledger:settle") {
+			t.Fatalf("token %q carries BOTH maker and checker roles: %v", tok, c.Roles)
+		}
+	}
+}
+
+func TestServiceTokens_WrongOrUnsetNotHonoured(t *testing.T) {
+	t.Setenv("MERIDIAN_LEDGER_MAKER_TOKEN", "maker-secret")
+	t.Setenv("MERIDIAN_LEDGER_SETTLE_TOKEN", "settle-secret")
+	if _, ok := ServiceClaims(svcReq("attacker-guess")); ok {
+		t.Fatal("wrong token must not authenticate")
+	}
+	// Unconfigured tokens: header never honoured (fail closed).
+	t.Setenv("MERIDIAN_LEDGER_MAKER_TOKEN", "")
+	t.Setenv("LEDGER_MAKER_TOKEN", "")
+	if _, ok := ServiceClaims(svcReq("maker-secret")); ok {
+		t.Fatal("unconfigured maker token must not be honoured")
+	}
+	// No header at all.
+	if _, ok := ServiceClaims(httptest.NewRequest("POST", "/x", nil)); ok {
+		t.Fatal("missing X-Service-Token must not authenticate")
+	}
+}
+
+func TestServiceTokens_MiddlewareGrantsLedgerRoles(t *testing.T) {
+	t.Setenv("MERIDIAN_LEDGER_MAKER_TOKEN", "maker-secret")
+	t.Setenv("MERIDIAN_LEDGER_SETTLE_TOKEN", "settle-secret")
+	var got Claims
+	h := Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = FromContext(r.Context())
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), svcReq("settle-secret"))
+	if !got.HasRole("ledger:settle") || got.HasRole("ledger:post") {
+		t.Fatalf("middleware claims = %v, want settle-only", got.Roles)
+	}
+	if got.Sub != "service:settlement" {
+		t.Fatalf("sub = %q", got.Sub)
 	}
 }
