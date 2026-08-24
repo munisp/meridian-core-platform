@@ -3,7 +3,8 @@
 # scale-down (15-min stabilization, max 2 pods/min).
 {{- range $name, $svc := .Values.services }}
 {{- $cfg := include "meridian.serviceConfig" (dict "root" $ "svc" $svc) | fromYaml }}
-{{- if $cfg.autoscaling.enabled }}
+{{- $enabled := dig "enabled" true $svc }}
+{{- if and $enabled $cfg.autoscaling.enabled }}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler

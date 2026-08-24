@@ -50,7 +50,7 @@ var defaultRoutes = []RouteSpec{
 	{ID: "core-geo-boundaries", Plane: "core", Name: "geo-boundaries", PathPrefix: "/v1/boundaries", Methods: []string{"GET"}, Upstream: "geo:8005", Service: "geo", Auth: true},
 	{ID: "core-notification", Plane: "core", Name: "notification", PathPrefix: "/v1/send", Methods: []string{"POST"}, Upstream: "notification:8006", Service: "notification", Auth: true},
 	{ID: "core-consent", Plane: "core", Name: "consent", PathPrefix: "/v1/consents", Methods: []string{"GET", "POST"}, Upstream: "consent:8007", Service: "consent", Auth: true},
-	{ID: "core-regwatch", Plane: "core", Name: "reg-watch", PathPrefix: "/v1/gates", Methods: []string{"GET", "POST"}, Upstream: "reg-watch:8011", Service: "reg-watch", Auth: true},
+	{ID: "core-regwatch", Plane: "core", Name: "reg-watch", PathPrefix: "/v1/gates", Methods: []string{"GET", "POST"}, Upstream: "reg-watch:8014", Service: "reg-watch", Auth: true},
 	{ID: "core-features", Plane: "core", Name: "feature-store", PathPrefix: "/v1/features", Methods: []string{"GET", "POST"}, Upstream: "feature-store:8012", Service: "feature-store", Auth: true},
 	{ID: "core-settlement", Plane: "core", Name: "settlement", PathPrefix: "/v1/recon", Methods: []string{"GET", "POST"}, Upstream: "settlement:8013", Service: "settlement", Auth: true},
 	{ID: "core-search", Plane: "core", Name: "search-indexer", PathPrefix: "/v1/search", Methods: []string{"GET"}, Upstream: "search-indexer:8008", Service: "search-indexer", Auth: true},

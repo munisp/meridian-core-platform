@@ -9,10 +9,11 @@
 //	POST /v1/migration/batches/{id}/verify   -> PASS/FAIL proof (JSON)
 //	GET  /v1/migration/batches/{id}/proof?format=text -> human summary
 //
-// Fail-closed: PROFILE=prod requires MIGRATION_SIGNING_KEY. Duplicate and
-// referential checks run against live tin-graph when TIN_GRAPH_URL is set
-// (POST /v1/verify/tin); without it checks are skipped and the manifest
-// carries an explicit [simulated] note.
+// Fail-closed: PROFILE=prod requires MIGRATION_SIGNING_KEY and TIN_GRAPH_URL.
+// Duplicate and referential checks run against live tin-graph when
+// TIN_GRAPH_URL is set (POST /v1/verify/tin); without it the service refuses
+// to boot under PROFILE=prod, and in dev the manifest carries an explicit
+// [simulated] note.
 package main
 
 import (
@@ -187,6 +188,9 @@ func main() {
 		live = &httpLiveIndex{base: strings.TrimRight(base, "/"), token: os.Getenv("TIN_GRAPH_TOKEN"), hc: &http.Client{Timeout: 10 * time.Second}}
 		log.Printf("live tin-graph checks via %s", base)
 	} else {
+		if os.Getenv("PROFILE") == "prod" {
+			log.Fatal("profile=prod FATAL: TIN_GRAPH_URL is required — refusing to run migration with duplicate/referential checks skipped (fail-closed)")
+		}
 		log.Printf("TIN_GRAPH_URL unset: live duplicate/referential checks skipped [simulated]")
 	}
 	key, keyID := signingKey()

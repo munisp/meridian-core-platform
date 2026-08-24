@@ -10,7 +10,10 @@ provenance:
   as_passed: "Deduction of Tax at Source (Withholding) Regulations 2024, as passed"
   as_gazetted: null
   source_citation: "Deduction of Tax at Source (WHT) Regulations 2024"
-signed: null
+signed:
+  algorithm: ed25519
+  key_id: meridian-ceremony-dev-001
+  signature: 9f24cbd98bab13e42078b2dacbc0afd69973653d3e972820ee9e38698ad4056b34e54643c21e76bb7d71f30528305d11646c5696f438586ade74370d98cd7200
 rules:
   - id: wht.carveout.smallco
     description: "Section: small companies (<= N2m fee base, no TIN exempt) carve-out"

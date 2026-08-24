@@ -5,7 +5,7 @@ info:
   description: |
     PLACEHOLDER — path reservation for meridian-compliance-suite/services/kyc-engine
     (owned by another workstream). Schemas to be completed from that service's code.
-servers: [ { url: http://localhost:8201 } ]
+servers: [ { url: http://localhost:8105 } ]
 paths:
   /healthz:
     get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }

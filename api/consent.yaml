@@ -3,7 +3,7 @@ info:
   title: Meridian Consent API
   version: 1.0.0
   description: NDPA consent capture/revoke/renew with HMAC-signed receipts (meridian-core-platform/services/consent).
-servers: [ { url: http://localhost:8006 } ]
+servers: [ { url: http://localhost:8007 } ]
 paths:
   /healthz:
     get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }

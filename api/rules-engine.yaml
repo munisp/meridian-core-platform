@@ -3,7 +3,7 @@ info:
   title: Meridian Rules Engine API
   version: 1.0.0
   description: Deterministic rule-pack evaluation with decision traces (meridian-core-platform/services/rules-engine, FastAPI).
-servers: [ { url: http://localhost:8005 } ]
+servers: [ { url: http://localhost:8001 } ]
 paths:
   /healthz:
     get: { summary: Liveness, security: [], responses: { '200': { description: OK } } }

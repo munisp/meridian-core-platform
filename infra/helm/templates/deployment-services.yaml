@@ -1,0 +1,90 @@
+# Application services (fixes B1 finding #5): one Deployment + Service per
+# enabled entry in .Values.services that maps to a real in-repo service.
+# HPAs (hpa.yaml), PDBs (pdb.yaml) and KEDA scalers (keda-scaledobject.yaml)
+# target these Deployments. Values entries without an in-repo implementation
+# (filing-api, payments-api, kyc-worker) carry enabled: false and render
+# nothing — see values-prod.yaml comments.
+{{- range $name, $svc := .Values.services }}
+{{- $cfg := include "meridian.serviceConfig" (dict "root" $ "svc" $svc) | fromYaml }}
+{{- $enabled := dig "enabled" true $svc }}
+{{- $port := include "meridian.servicePort" $name }}
+{{- if and $enabled $port }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/part-of: meridian-core
+spec:
+  replicas: {{ $cfg.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $name }}
+        app.kubernetes.io/part-of: meridian-core
+    spec:
+      securityContext:
+        {{- include "meridian.podSecurityContext" . | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $cfg.terminationGracePeriodSeconds }}
+      containers:
+        - name: {{ $name }}
+          image: {{ $svc.image | default (printf "%s/%s:%s" $.Values.global.imageRegistry $name $.Values.global.imageTag) }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          env:
+            # PROFILE drives the platform's fail-closed prod gates. Default is
+            # the chart environment; a per-service env pin (e.g. edge-policy
+            # pins PROFILE=prod in values-prod) wins.
+            {{- $profile := $.Values.environment }}
+            {{- if and $svc.env (hasKey $svc.env "PROFILE") }}
+            {{- $profile = index $svc.env "PROFILE" }}
+            {{- end }}
+            - {name: PROFILE, value: {{ $profile | quote }}}
+            {{- range $ek, $ev := $svc.env }}
+            {{- if ne $ek "PROFILE" }}
+            - {name: {{ $ek }}, value: {{ $ev | quote }}}
+            {{- end }}
+            {{- end }}
+          ports:
+            - {containerPort: {{ $port }}, protocol: TCP}
+          securityContext:
+            {{- include "meridian.containerSecurityContext" . | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /healthz, port: {{ $port }}}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: {path: /healthz, port: {{ $port }}}
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 6
+          {{- if gt (int ($cfg.preStopSleepSeconds | default 0)) 0 }}
+          # In-flight drain window (SPEC B). Requires a shell in the image;
+          # set preStopSleepSeconds: 0 for shell-less (distroless) images.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep {{ $cfg.preStopSleepSeconds }}"]
+          {{- end }}
+          resources:
+            {{- toYaml $cfg.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/part-of: meridian-core
+spec:
+  selector:
+    app.kubernetes.io/name: {{ $name }}
+  ports:
+    - {name: http, port: {{ $port }}, targetPort: {{ $port }}, protocol: TCP}
+{{- end }}
+{{- end }}
