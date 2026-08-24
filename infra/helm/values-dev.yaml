@@ -4,8 +4,11 @@ environment: dev
 
 global:
   imagePullPolicy: IfNotPresent
+  imageRegistry: ghcr.io/munisp/meridian-core
+  imageTag: "0.1.0"
 
 defaults:
+  enabled: true
   replicaCount: 1
   resources:
     requests: {cpu: "250m", memory: 256Mi}
@@ -21,8 +24,10 @@ defaults:
 
 # All services fall back to `defaults`; no per-service overrides needed in dev.
 services:
-  filing-api: {}
-  payments-api: {}
+  # No in-repo implementation (see values-prod.yaml note): disabled so the
+  # render contains no phantom Deployments/HPAs/PDBs.
+  filing-api: {enabled: false}
+  payments-api: {enabled: false}
   admin-api: {}
   audit-evidence: {}
   consent: {}
@@ -37,7 +42,7 @@ services:
   search-indexer: {}
   settlement: {}
   tin-graph: {}
-  kyc-worker: {}
+  kyc-worker: {enabled: false}
 
 # Stateful middleware workloads (fix/health-probes Deployment templates):
 # required so dev render doesn't nil-pointer on .Values.workloads.

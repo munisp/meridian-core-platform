@@ -2,7 +2,8 @@
 # (node drain, rolling upgrade) never takes a service below quorum.
 {{- range $name, $svc := .Values.services }}
 {{- $cfg := include "meridian.serviceConfig" (dict "root" $ "svc" $svc) | fromYaml }}
-{{- if $cfg.pdb.enabled }}
+{{- $enabled := dig "enabled" true $svc }}
+{{- if and $enabled $cfg.pdb.enabled }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

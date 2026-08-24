@@ -5,6 +5,8 @@
 {{- $k := .Values.keda }}
 {{- if and $k $k.cronPreScale.enabled }}
 {{- range $k.cronPreScale.targets }}
+{{- $tsvc := index $.Values.services . | default dict }}
+{{- if dig "enabled" true $tsvc }}
 ---
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
@@ -27,8 +29,9 @@ spec:
         desiredReplicas: {{ $k.cronPreScale.desiredReplicas | quote }}
 {{- end }}
 {{- end }}
+{{- end }}
 {{- range $name, $svc := .Values.services }}
-{{- if $svc.kafkaConsumer }}
+{{- if and (dig "enabled" true $svc) $svc.kafkaConsumer }}
 {{- $cfg := include "meridian.serviceConfig" (dict "root" $ "svc" $svc) | fromYaml }}
 {{- if $cfg.keda.enabled }}
 ---
@@ -57,7 +60,7 @@ spec:
 {{- end }}
 {{- end }}
 # ML serving (SPEC B section 5): kyc workers 2->20 pods on queue depth.
-{{- if $k.ml }}
+{{- if and $k.ml (dig "enabled" false (index .Values.services "kyc-worker" | default dict)) }}
 ---
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: meridian-core
-description: Meridian core platform — national-scale values, HPA/PDB/KEDA templates (SPEC B)
+description: Meridian core platform — application-service Deployments/Services plus national-scale HPA/PDB/KEDA templates (SPEC B)
 type: application
 version: 0.1.0
 appVersion: "1.0.0"

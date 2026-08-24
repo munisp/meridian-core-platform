@@ -7,9 +7,15 @@ environment: prod
 
 global:
   imagePullPolicy: IfNotPresent
+  # Default image coordinates for application services (deployment-services.yaml).
+  imageRegistry: ghcr.io/munisp/meridian-core
+  imageTag: "0.1.0"
 
 # Defaults applied to every stateless service unless overridden below.
 defaults:
+  # enabled defaults true; entries with NO in-repo implementation are
+  # explicitly disabled below so HPA/PDB/KEDA never target phantom workloads.
+  enabled: true
   replicaCount: 4
   resources:
     requests: {cpu: "1", memory: 1Gi}
@@ -47,9 +53,15 @@ defaults:
 # kafkaLagConsumers: services that consume Kafka — they get the additional
 # kafka_consumer_lag external HPA metric (AverageValue 5000) and KEDA lag scalers.
 services:
+  # GAP (honest): filing-api, payments-api and kyc-worker have no
+  # implementation in this repo (verified against the source service map),
+  # so they are disabled: no Deployment/Service renders for them and the
+  # HPA/PDB/KEDA templates skip them. Enable only once the services exist.
   filing-api:
+    enabled: false
     autoscaling: {minReplicas: 6, maxReplicas: 80}
   payments-api:
+    enabled: false
     autoscaling: {minReplicas: 6, maxReplicas: 80}
   admin-api:
     autoscaling: {minReplicas: 2, maxReplicas: 20}
@@ -104,8 +116,10 @@ services:
   tin-graph:
     autoscaling: {minReplicas: 4, maxReplicas: 40}
   kyc-worker:
+    # No in-repo implementation (see note at the top of this map); disabled.
     # ML serving (SPEC B section 5): KEDA on queue depth, 2->20 pods,
     # CPU 4/pod, mem 8Gi, one model set per pod.
+    enabled: false
     replicaCount: 2
     resources:
       requests: {cpu: "4", memory: 8Gi}

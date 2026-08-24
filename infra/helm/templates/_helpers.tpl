@@ -27,3 +27,29 @@ readOnlyRootFilesystem: true
 capabilities:
   drop: ["ALL"]
 {{- end -}}
+{{- /*
+In-repo service ports (single source of truth: the service binds in
+meridian-core-platform source; see docs/service-map / api/*.yaml). Services
+not listed here render no Deployment/Service and must carry enabled: false
+in values.
+*/ -}}
+{{- define "meridian.servicePort" -}}
+{{- $ports := dict
+  "admin-api" 8095
+  "audit-evidence" 8004
+  "consent" 8007
+  "edge-policy" 8009
+  "feature-store" 8012
+  "geo" 8005
+  "ledger" 8010
+  "migration" 8011
+  "notification" 8006
+  "reg-watch" 8014
+  "rp-registry" 8002
+  "rules-engine" 8001
+  "search-indexer" 8008
+  "settlement" 8013
+  "tin-graph" 8003
+-}}
+{{- get $ports . -}}
+{{- end -}}
