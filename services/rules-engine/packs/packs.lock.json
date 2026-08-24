@@ -1,0 +1,10 @@
+{
+ "_comment": "Lockfile for the bundled sample pack dir. sha256 = canonical pack JSON (signed block removed); matches rule-packs/packs.lock.json pin for rp-wht-2024.",
+ "pins": {
+  "rp-wht-2024": {
+   "version": "1.0.0",
+   "sha256": "889e2cb3b54f255b9680c503fa90328ee5863b8c999ad48d428a6ee33029edf2",
+   "subject_to_regazette": true
+  }
+ }
+}

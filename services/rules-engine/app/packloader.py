@@ -1,12 +1,12 @@
 """Pack loading: local PACKS_DIR (packs/<id>/<version>.yaml) and/or the
 rp-registry service (RP_REGISTRY_URL). Packs are validated on load.
 
-Integrity (PACK_INTEGRITY=enforce|off, default: enforce when a lockfile is
-found): packs pinned in a packs.lock.json (PACKS_LOCK_PATH) must match their
-canonical sha256 pin; published packs must carry an ed25519 ceremony
-signature that verifies against rule-packs/signing_keys.json
-(PACK_SIGNING_KEYS). Unsigned or hash-mismatched published packs are
-rejected when enforcing."""
+Integrity (PACK_INTEGRITY=enforce|off, default: enforce): packs pinned in a
+packs.lock.json (PACKS_LOCK_PATH) must match their canonical sha256 pin;
+published packs must carry an ed25519 ceremony signature that verifies
+against signing_keys.json (PACK_SIGNING_KEYS). Unsigned or hash-mismatched
+published packs are rejected. PACK_INTEGRITY=off is a dev-only opt-out and
+is refused under PROFILE=prod."""
 from __future__ import annotations
 
 import hashlib
@@ -115,7 +115,17 @@ class PackLoader:
                 self._signing_keys = _load_signing_keys(Path(c))
                 break
         if enforce is None:
-            enforce = os.environ.get("PACK_INTEGRITY", "").lower() == "enforce" or bool(self._pins)
+            mode = os.environ.get("PACK_INTEGRITY", "enforce").lower()
+            if mode == "off":
+                if os.environ.get("PROFILE", "").lower() == "prod":
+                    raise PackIntegrityError(
+                        "profile=prod FATAL: PACK_INTEGRITY=off is not allowed "
+                        "(pack integrity enforcement is fail-closed in prod)")
+                enforce = False
+            else:
+                # Default ON: 'enforce' or unset both enforce. Unsigned or
+                # hash-mismatched published packs are rejected.
+                enforce = True
         self.enforce = enforce
 
     @staticmethod
