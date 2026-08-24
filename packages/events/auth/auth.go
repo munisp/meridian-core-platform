@@ -7,11 +7,13 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -158,6 +160,12 @@ func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var claims Claims
 		authz := r.Header.Get("Authorization")
+		if sc, ok := ServiceClaims(r); ok {
+			// B2-#12 repair: service-to-service caller authenticated by a
+			// DISTINCT env-injected maker or settle token (constant-time
+			// compare). No single token carries both ledger roles.
+			claims = sc
+		} else {
 		switch {
 		case strings.HasPrefix(authz, "Bearer "):
 			c, err := VerifyHS256(strings.TrimPrefix(authz, "Bearer "))
@@ -177,6 +185,7 @@ func Middleware(next http.Handler) http.Handler {
 			httpx.Errorf(w, http.StatusUnauthorized, "unauthorized", "Bearer JWT or X-Dev-Role required")
 			return
 		}
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, claims)))
 	})
 }
@@ -191,4 +200,57 @@ func RequireRole(role string, next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// ---- B2-#12 repair: DISTINCT service-to-service tokens ----------------
+// Money services (settlement, pos-vat, ombud, admin console proxy,
+// inclusion PSM/NIP) call the core ledger from server-side jobs with no
+// end-user JWT. They authenticate with env-injected service tokens sent as
+// X-Service-Token. The maker/checker split ALSO constrains the machine
+// path: the maker token grants ONLY "ledger:post" (pending-create) and the
+// settle token grants ONLY "ledger:settle" (post/void). No token carries
+// both — a single stolen service token can no longer run the full
+// hold->settle saga (V2 round: the previous shared token granted both
+// roles, bypassing maker/checker SoD for the machine path).
+//
+// Tokens are never honoured when unconfigured (fail closed). The forgeable
+// X-Dev-Role header remains dev-only.
+
+// ServiceMakerTokenEnvNames are consulted for the maker service token
+// (first non-empty wins). Grants ledger:post only.
+var ServiceMakerTokenEnvNames = []string{"MERIDIAN_LEDGER_MAKER_TOKEN", "LEDGER_MAKER_TOKEN"}
+
+// ServiceSettleTokenEnvNames are consulted for the settle (checker)
+// service token (first non-empty wins). Grants ledger:settle only.
+var ServiceSettleTokenEnvNames = []string{"MERIDIAN_LEDGER_SETTLE_TOKEN", "LEDGER_SETTLE_TOKEN"}
+
+func configuredServiceToken(names []string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// ServiceClaims returns the principal for a request carrying a configured
+// service token, and true. ok is false when the header is absent, no token
+// is configured, or the token matches neither role (constant-time compare
+// against each configured token).
+func ServiceClaims(r *http.Request) (Claims, bool) {
+	got := r.Header.Get("X-Service-Token")
+	if got == "" {
+		return Claims{}, false
+	}
+	sub := "service:" + r.Header.Get("X-Service-Name")
+	tenant := r.Header.Get("X-Tenant-ID")
+	if want := configuredServiceToken(ServiceMakerTokenEnvNames); want != "" &&
+		subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
+		return Claims{Sub: sub, Roles: []string{"ledger:post"}, TenantID: tenant}, true
+	}
+	if want := configuredServiceToken(ServiceSettleTokenEnvNames); want != "" &&
+		subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
+		return Claims{Sub: sub, Roles: []string{"ledger:settle"}, TenantID: tenant}, true
+	}
+	return Claims{}, false
 }

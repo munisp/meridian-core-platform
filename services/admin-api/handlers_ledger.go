@@ -35,7 +35,7 @@ func (a *app) ledgerUnavailable(w http.ResponseWriter) bool {
 func (a *app) handleLedgerAccounts(w http.ResponseWriter, r *http.Request) {
 	if base, ok := a.serviceURL("ledger"); ok {
 		var raw map[string]any
-		if err := fetchJSON(a.client, base+"/v1/accounts", &raw); err == nil {
+		if err := fetchJSONToken(a.client, base+"/v1/accounts", makerServiceToken(), &raw); err == nil {
 			raw["source"] = "live"
 			writeJSON(w, http.StatusOK, raw)
 			return
@@ -58,7 +58,7 @@ func (a *app) handleLedgerBalance(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if base, ok := a.serviceURL("ledger"); ok {
 		var raw map[string]any
-		if err := fetchJSON(a.client, base+"/v1/accounts/"+id+"/balance", &raw); err == nil {
+		if err := fetchJSONToken(a.client, base+"/v1/accounts/"+id+"/balance", makerServiceToken(), &raw); err == nil {
 			raw["source"] = "live"
 			writeJSON(w, http.StatusOK, raw)
 			return
@@ -91,7 +91,7 @@ func (a *app) handleLedgerTransfer(w http.ResponseWriter, r *http.Request) {
 	// try live ledger pending transfer
 	if base, ok := a.serviceURL("ledger"); ok {
 		var raw map[string]any
-		if err := postJSON(a.client, base+"/v1/transfers/pending", in, &raw); err == nil {
+		if err := postJSONToken(a.client, base+"/v1/transfers/pending", makerServiceToken(), in, &raw); err == nil {
 			raw["source"] = "live"
 			a.appendAudit("ledger.transfer", "transfer:"+in.ID, actorOf(r), "pending", "via ledger svc (live)")
 			writeJSON(w, http.StatusCreated, raw)
@@ -116,7 +116,7 @@ func (a *app) settleTransfer(w http.ResponseWriter, r *http.Request, action stri
 	id := r.PathValue("id")
 	if base, ok := a.serviceURL("ledger"); ok {
 		var raw map[string]any
-		if err := postJSON(a.client, base+"/v1/transfers/"+id+"/"+action, map[string]any{}, &raw); err == nil {
+		if err := postJSONToken(a.client, base+"/v1/transfers/"+id+"/"+action, settleServiceToken(), map[string]any{}, &raw); err == nil {
 			raw["source"] = "live"
 			writeJSON(w, http.StatusOK, raw)
 			return
