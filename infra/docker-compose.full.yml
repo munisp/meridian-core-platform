@@ -69,6 +69,29 @@ services:
     image: bitnami/etcd:3.5
     environment: [ALLOW_NONE_AUTHENTICATION=yes]
     ports: ["2379:2379"]
+
+  # ---- otel-foundation wave: collector + alertmanager -------------------
+  # Receives OTLP (4317 grpc / 4318 http), re-exports Prometheus on :9464.
+  # Config: observability/otel-collector-config.yaml. Set OTELCOL_PG_PASSWORD.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      - OTELCOL_PG_PASSWORD=${OTELCOL_PG_PASSWORD:-meridian}
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports: ["4317:4317", "4318:4318", "9464:9464", "8888:8888"]
+    depends_on: [redpanda, redis, postgres, opensearch]
+
+  # Config contains ${ENV} placeholders: render with envsubst into
+  # observability/.alertmanager.rendered.yml before starting (see file header).
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./observability/.alertmanager.rendered.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports: ["9093:9093"]
+
 volumes:
   pgdata: {}
   tbdata: {}

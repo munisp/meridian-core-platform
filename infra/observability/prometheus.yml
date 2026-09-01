@@ -132,3 +132,11 @@ scrape_configs:
   # topics, no service). Job intentionally omitted; add when the service lands.
   # The str_dlq_depth / str_submission_errors_total alerts in alerts.yml are
   # tagged instrumentation: pending accordingly.
+
+  # OTel collector (otel-foundation wave): re-exports all OTLP metrics in
+  # Prometheus format on :9464 and self-metrics on :8888. Single scrape
+  # point that also carries tenant.id labels (resource_to_telemetry_conversion).
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:9464", "otel-collector:8888"]
+        labels: {instrumented: "true"}
