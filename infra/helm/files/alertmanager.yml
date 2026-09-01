@@ -1,46 +1,90 @@
-# Meridian platform — Alertmanager config (closes Wave D gap D4).
+# Meridian platform — Alertmanager config (otel-foundation wave).
 #
-# Minimal routing. The receiver is a webhook whose URL is injected from the
-# environment at deploy time (envsubst / secret mount) — it is deliberately a
-# placeholder; wire it to the on-call bridge (PagerDuty/Opsgenie/Teams) before
-# enabling in production. No receiver here claims to be production-ready.
+# Routing tree by severity and tenant_id label. Receivers:
+#   - email-critical / email-warning : SMTP injected from env at deploy time
+#   - webhook-generic                : on-call bridge (PagerDuty/Opsgenie/Teams)
+#   - slack-warnings                 : slack-compatible incoming webhook
+# All URLs/credentials are env-substituted placeholders (envsubst at deploy);
+# none claim to be production-ready until wired to the real bridges.
 #
 # Deploy: envsubst < alertmanager.yml > /etc/alertmanager/alertmanager.yml
-# with ALERTMANAGER_WEBHOOK_URL set from the vault.
+# with ALERTMANAGER_WEBHOOK_URL, SLACK_WEBHOOK_URL, SMTP_* set from the vault.
 
 global:
   resolve_timeout: 5m
+  smtp_smarthost: "${SMTP_SMARTHOST}"      # e.g. smtp.example.com:587
+  smtp_from: "${SMTP_FROM}"                # e.g. alerts@meridian.example
+  smtp_auth_username: "${SMTP_USERNAME}"
+  smtp_auth_password: "${SMTP_PASSWORD}"
+  smtp_require_tls: true
 
 route:
-  receiver: webhook-placeholder
-  group_by: ["alertname", "severity", "team"]
+  receiver: webhook-generic
+  group_by: ["alertname", "severity", "tenant_id", "team"]
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    # Critical platform/compliance alerts page immediately.
+    # Critical alerts page immediately, per tenant when labelled.
     - matchers: ['severity = "critical"']
-      receiver: webhook-placeholder
+      receiver: email-critical
       repeat_interval: 1h
-    # Info-level pending-instrumentation reminders are batched daily so they
-    # stay visible without paging while services lack /metrics (Wave D D2).
+      routes:
+        # Tenant-scoped criticals also go to the tenant ops webhook so
+        # per-tenant on-call can react before the global bridge escalates.
+        - matchers: ['tenant_id != ""']
+          receiver: webhook-tenant
+          continue: true
+    # Warnings: email + slack-compatible webhook, no paging.
+    - matchers: ['severity = "warning"']
+      receiver: slack-warnings
+      repeat_interval: 12h
+    # Info-level pending-instrumentation reminders batched daily (Wave D D2).
     - matchers: ['instrumentation = "pending"']
-      receiver: webhook-placeholder
+      receiver: email-info
       repeat_interval: 24h
 
 receivers:
-  - name: webhook-placeholder
+  - name: webhook-generic
     webhook_configs:
       - url: "${ALERTMANAGER_WEBHOOK_URL}"  # required at deploy time; no default
         send_resolved: true
 
+  - name: webhook-tenant
+    webhook_configs:
+      - url: "${TENANT_ALERT_WEBHOOK_URL}"  # per-tenant on-call bridge
+        send_resolved: true
+
+  - name: email-critical
+    email_configs:
+      - to: "${ALERT_EMAIL_CRITICAL}"
+        send_resolved: true
+
+  - name: email-info
+    email_configs:
+      - to: "${ALERT_EMAIL_INFO}"
+        send_resolved: true
+
+  - name: slack-warnings
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#meridian-alerts"
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: >-
+          {{ range .Alerts }}*{{ .Labels.severity }}* {{ .Annotations.summary }}
+          tenant={{ .Labels.tenant_id }} team={{ .Labels.team }}
+          {{ end }}
+
 inhibit_rules:
-  # Don't spam the warning DLQ alert when the critical one is already firing
-  # for the same topic.
+  # A firing critical inhibits the matching warning for the same target.
+  - source_matchers: ['severity = "critical"']
+    target_matchers: ['severity = "warning"']
+    equal: ["alertname", "tenant_id"]
+  # Don't spam the warning DLQ alert when the critical one is already firing.
   - source_matchers: ['alertname = "KafkaDlqDepthCritical"']
     target_matchers: ['alertname = "KafkaDlqDepthWarning"']
     equal: ["redpanda_topic"]
-  # Same for the pending STR DLQ pair.
   - source_matchers: ['alertname = "StrDlqDepthCritical"']
     target_matchers: ['alertname = "StrDlqDepthWarning"']
     equal: ["team"]

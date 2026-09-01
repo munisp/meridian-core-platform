@@ -46,6 +46,16 @@ groups:
           summary: "{{ $labels.job }} has no scrapeable /metrics (expected: pending instrumentation)"
           description: "Service {{ $labels.job }} does not expose /metrics yet (Wave D D2). Verify the process is alive via /healthz; close this alert by adding prometheus instrumentation to the service."
 
+      - alert: HttpErrorRateHigh
+        # LIVE since r9: meridian_http_requests_total is emitted by every
+        # instrumented Go service (httpx metrics.go, METRICS_PORT listener).
+        expr: sum by (job) (rate(meridian_http_requests_total{status=~"5.."}[5m])) > 0.5
+        for: 10m
+        labels: {severity: warning, team: platform}
+        annotations:
+          summary: "{{ $labels.job }} 5xx rate elevated"
+          description: "5xx responses > 0.5/s for 10m on {{ $labels.job }}. Scrape source: METRICS_PORT listener (meridian_http_requests_total). Runbook: check service logs for internal_error lines, then downstream deps (postgres, permify, tigerbeetle)."
+
       - alert: RedpandaUnderReplicatedPartitions
         expr: sum(redpanda_kafka_under_replicated_replicas) > 0
         for: 5m
@@ -190,3 +200,35 @@ groups:
         annotations:
           summary: "TigerBeetle cluster unavailable"
           description: "PENDING INSTRUMENTATION — no TB metrics endpoint exists; add a probe (ledger /readyz dependency or exec health per D3 runbook step 4). When live: check TB replicas on :3000, quorum in TB logs, then ledger pending-transfer backlog."
+
+  # ---------------------------------------------------------------------
+  # OTel foundation wave: telemetry-pipeline health + app error rate from
+  # the existing /metrics exposition (meridian_http_requests_total).
+  # ---------------------------------------------------------------------
+  - name: telemetry.foundation
+    rules:
+      - alert: OtelCollectorDown
+        expr: up{job="otel-collector"} == 0
+        for: 2m
+        labels: {severity: critical, team: platform}
+        annotations:
+          summary: "OpenTelemetry collector is down"
+          description: "Traces/metrics/logs aggregation stopped. App /metrics scraping by Prometheus continues, but OTLP telemetry is being dropped. Check the otel-collector container and its :8888 self-metrics."
+
+      - alert: OtelCollectorRefusingSpans
+        expr: rate(otelcol_receiver_refused_spans_total[5m]) > 0
+        for: 10m
+        labels: {severity: warning, team: platform}
+        annotations:
+          summary: "Collector refusing spans (memory limiter / queue pressure)"
+          description: "otelcol_receiver_refused_spans_total rising: collector is shedding telemetry under memory_limiter. Scale the collector or reduce OTEL_TRACES_SAMPLER_ARG."
+
+      - alert: SpanErrorRateHigh
+        expr: |
+          sum by (service) (rate(meridian_http_requests_total{status=~"5.."}[10m]))
+            / sum by (service) (rate(meridian_http_requests_total[10m])) > 0.05
+        for: 10m
+        labels: {severity: warning, team: platform}
+        annotations:
+          summary: "HTTP 5xx rate > 5% on {{ $labels.service }}"
+          description: "Server-span error proxy from the /metrics exposition. Until spanmetrics connector is enabled this is the span error-rate signal; drill into otel spans via the debug exporter or Grafana dashboards."
