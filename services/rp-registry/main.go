@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/bus"
 	"github.com/munisp/meridian-core-platform/packages/events/envelope"
@@ -108,6 +109,11 @@ func part(p []string, i int) string {
 }
 
 func main() {
+	// OTel bootstrap (DESIGN-CONTRACT): fail-soft — no OTLP endpoint means
+	// no-op providers; PROFILE=prod without one logs a loud warning.
+	otelProv := otelx.InitProvidersFor(context.Background(), service, version)
+	defer otelProv.Shutdown(context.Background())
+
 	dir := httpx.Env("DATA_DIR", "./data")
 	st, err := store.OpenFromEnv(dir)
 	if err != nil {

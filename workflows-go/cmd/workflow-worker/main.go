@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	sdkx "github.com/munisp/meridian-core-platform/packages/temporal-sdkx"
 	workflows "github.com/munisp/meridian-core-platform/workflows-go"
 )
@@ -115,6 +116,11 @@ func registerWorkflows(r sdkx.Runner) error {
 }
 
 func main() {
+	// OTel bootstrap (DESIGN-CONTRACT): fail-soft — no OTLP endpoint means
+	// no-op providers; PROFILE=prod without one logs a loud warning.
+	otelProv := otelx.InitProvidersFor(context.Background(), "workflow-worker", "")
+	defer otelProv.Shutdown(context.Background())
+
 	runner := sdkx.NewRunnerFromEnv()
 	if err := registerWorkflows(runner); err != nil {
 		log.Fatalf("component=workflow-worker FATAL: %v", err)

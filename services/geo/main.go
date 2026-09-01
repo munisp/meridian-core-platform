@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"github.com/munisp/meridian-core-platform/services/geo/internal/geojson"
@@ -39,6 +40,11 @@ type batchReq struct {
 }
 
 func main() {
+	// OTel bootstrap (DESIGN-CONTRACT): fail-soft — no OTLP endpoint means
+	// no-op providers; PROFILE=prod without one logs a loud warning.
+	otelProv := otelx.InitProvidersFor(context.Background(), service, version)
+	defer otelProv.Shutdown(context.Background())
+
 	ds, err := geojson.LoadEmbedded()
 	if err != nil {
 		log.Fatalf("load embedded boundaries: %v", err)
