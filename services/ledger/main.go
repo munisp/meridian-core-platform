@@ -20,6 +20,7 @@ import (
 	"github.com/munisp/meridian-core-platform/packages/events/bus"
 	"github.com/munisp/meridian-core-platform/packages/events/envelope"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"github.com/munisp/meridian-core-platform/packages/events/outbox"
 	sdkx "github.com/munisp/meridian-core-platform/packages/temporal-sdkx"
 	"github.com/munisp/meridian-core-platform/services/ledger/internal/tb"
@@ -64,6 +65,11 @@ type server struct {
 }
 
 func main() {
+	// OTel bootstrap (DESIGN-CONTRACT): fail-soft — no OTLP endpoint means
+	// no-op providers; PROFILE=prod without one logs a loud warning.
+	otelProv := otelx.InitProvidersFor(context.Background(), service, version)
+	defer otelProv.Shutdown(context.Background())
+
 	dir := httpx.Env("DATA_DIR", "./data")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Fatal(err)
@@ -96,6 +102,8 @@ func main() {
 		dev = tb.NewDevClient()
 		client = dev
 	}
+	// OTel: every TigerBeetle call gets a fail-soft client span (contract).
+	client = tb.Traced(client)
 	srv := &server{client: client, dev: dev, dir: dir, thresh: newThresholdTracker()}
 	srv.initMoneyWorkflows()
 
@@ -139,6 +147,12 @@ func main() {
 	addr := ":" + httpx.Port("8010")
 	log.Printf("%s %s (DATA_DIR=%s, EVENT_BUS=%s)", service, version, dir, httpx.Env("EVENT_BUS", "inproc"))
 	log.Fatal(httpx.ListenAndServe(addr, handler))
+}
+
+// tbFor returns the ledger client with spans parented to the request
+// context so TigerBeetle calls join the incoming request trace.
+func (s *server) tbFor(r *http.Request) tb.LedgerClient {
+	return tb.WithContext(r.Context(), s.client)
 }
 
 // routes registers the HTTP API. Security (audit H-4): money-movement
@@ -308,7 +322,7 @@ func (s *server) createAccounts(w http.ResponseWriter, r *http.Request) {
 	if code == 0 {
 		code = 1
 	}
-	res, err := s.client.CreateAccounts([]tb.Account{{
+	res, err := s.tbFor(r).CreateAccounts([]tb.Account{{
 		ID: id, Ledger: req.Namespace, Code: code, Flags: req.Flags, UserData: req.UserData,
 	}})
 	if err != nil {
@@ -321,12 +335,12 @@ func (s *server) createAccounts(w http.ResponseWriter, r *http.Request) {
 	} else if res[0].Code == tb.Exists {
 		status = http.StatusOK
 	}
-	acct, _, _ := s.client.GetAccount(id)
+	acct, _, _ := s.tbFor(r).GetAccount(id)
 	httpx.JSON(w, status, map[string]any{"result": res[0], "account": acct})
 }
 
 func (s *server) listAccounts(w http.ResponseWriter, r *http.Request) {
-	accts, err := s.client.ListAccounts()
+	accts, err := s.tbFor(r).ListAccounts()
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
@@ -340,7 +354,7 @@ func (s *server) getBalance(w http.ResponseWriter, r *http.Request) {
 		httpx.BadRequest(w, "%v", err)
 		return
 	}
-	bal, res, err := s.client.Balance(id)
+	bal, res, err := s.tbFor(r).Balance(id)
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
@@ -426,7 +440,7 @@ func (s *server) createTransfer(w http.ResponseWriter, r *http.Request) {
 		httpx.BadRequest(w, "%v", err)
 		return
 	}
-	res, err := s.client.Transfer(t)
+	res, err := s.tbFor(r).Transfer(t)
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
@@ -457,7 +471,7 @@ func (s *server) createPending(w http.ResponseWriter, r *http.Request) {
 		httpx.BadRequest(w, "%v", err)
 		return
 	}
-	res, err := s.client.PendingTransfer(t)
+	res, err := s.tbFor(r).PendingTransfer(t)
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
@@ -494,9 +508,9 @@ func (s *server) postPending(w http.ResponseWriter, r *http.Request) {
 			httpx.BadRequest(w, "invalid post_id: %v", err)
 			return
 		}
-		res, err = s.client.PostPendingAs(id, postID, req.AmountKobo, req.Code)
+		res, err = s.tbFor(r).PostPendingAs(id, postID, req.AmountKobo, req.Code)
 	} else {
-		res, err = s.client.PostPending(id, req.AmountKobo, req.Code)
+		res, err = s.tbFor(r).PostPending(id, req.AmountKobo, req.Code)
 	}
 	if err != nil {
 		httpx.Internal(w, "%v", err)
@@ -513,7 +527,7 @@ func (s *server) getTransfer(w http.ResponseWriter, r *http.Request) {
 		httpx.BadRequest(w, "%v", err)
 		return
 	}
-	t, res, err := s.client.GetTransfer(id)
+	t, res, err := s.tbFor(r).GetTransfer(id)
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
@@ -532,7 +546,7 @@ func (s *server) voidPending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// code=0: the client reuses the pending transfer's code (TB rule).
-	res, err := s.client.VoidPending(id, 0)
+	res, err := s.tbFor(r).VoidPending(id, 0)
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
@@ -550,7 +564,7 @@ func (s *server) listTransfers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	trs, err := s.client.ListTransfers(id)
+	trs, err := s.tbFor(r).ListTransfers(id)
 	if err != nil {
 		httpx.Internal(w, "%v", err)
 		return
