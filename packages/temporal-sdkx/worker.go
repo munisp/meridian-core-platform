@@ -103,15 +103,17 @@ func (r *TemporalRunner) Execute(ctx context.Context, name string, input any) (a
 	id := fmt.Sprintf("wf-run-%d-%d", r.seq, time.Now().UnixNano())
 	r.mu.Unlock()
 	rec := RunRecord{WorkflowID: id, Name: name, StartedAt: time.Now().UTC()}
-	run, err := r.client.ExecuteWorkflow(ctx, tclient.StartWorkflowOptions{
+	wfCtx, span := startSpan(ctx, "workflow", name)
+	run, err := r.client.ExecuteWorkflow(wfCtx, tclient.StartWorkflowOptions{
 		ID:          id,
 		TaskQueue:   r.taskQueue,
 		RetryPolicy: TemporalRetryPolicy(DefaultRetryPolicy),
 	}, name, input)
 	var out any
 	if err == nil {
-		err = run.Get(ctx, &out)
+		err = run.Get(wfCtx, &out)
 	}
+	endSpan(span, err)
 	rec.EndedAt = time.Now().UTC()
 	rec.Duration = rec.EndedAt.Sub(rec.StartedAt)
 	if err != nil {

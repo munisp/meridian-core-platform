@@ -24,6 +24,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 )
 
@@ -95,7 +96,7 @@ func consentCheckerFromEnv(profile string) (consentChecker, error) {
 		log.Printf("profile=dev component=tin-graph WARNING: CONSENT_URL unset, consent gate is allow-all (dev only)")
 		return noopConsentChecker{}, nil
 	}
-	return &httpConsentChecker{base: base, client: &http.Client{Timeout: 5 * time.Second}}, nil
+	return &httpConsentChecker{base: base, client: &http.Client{Timeout: 5 * time.Second, Transport: otelx.Client(nil)}}, nil
 }
 
 // gateVerification enforces the C1 contract on a verify endpoint. It returns

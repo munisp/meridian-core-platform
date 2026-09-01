@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"os"
 	"path/filepath"
@@ -178,6 +180,11 @@ func signingKey() ([]byte, string) {
 }
 
 func main() {
+	// OTel bootstrap (DESIGN-CONTRACT): fail-soft — no OTLP endpoint means
+	// no-op providers; PROFILE=prod without one logs a loud warning.
+	otelProv := otelx.InitProvidersFor(context.Background(), service, version)
+	defer otelProv.Shutdown(context.Background())
+
 	dir := env("DATA_DIR", "./data")
 	st, err := openJSONStore(dir)
 	if err != nil {
@@ -185,7 +192,7 @@ func main() {
 	}
 	var live mig.LiveIndex
 	if base := os.Getenv("TIN_GRAPH_URL"); base != "" {
-		live = &httpLiveIndex{base: strings.TrimRight(base, "/"), token: os.Getenv("TIN_GRAPH_TOKEN"), hc: &http.Client{Timeout: 10 * time.Second}}
+		live = &httpLiveIndex{base: strings.TrimRight(base, "/"), token: os.Getenv("TIN_GRAPH_TOKEN"), hc: &http.Client{Timeout: 10 * time.Second, Transport: otelx.Client(nil)}}
 		log.Printf("live tin-graph checks via %s", base)
 	} else {
 		if os.Getenv("PROFILE") == "prod" {

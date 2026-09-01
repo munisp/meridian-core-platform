@@ -9,6 +9,7 @@ package otelx
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -70,6 +71,12 @@ func Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(sr, r2)
 
 		route := r2.Pattern
+		// Go 1.22 ServeMux patterns include the method ("GET /v1/x"); strip it
+		// so span name/http.route stay "<METHOD> <route-template>"-shaped per
+		// the contract (no method duplication, no cardinality change).
+		if strings.HasPrefix(route, r.Method+" ") {
+			route = route[len(r.Method)+1:]
+		}
 		if route == "" {
 			route = "unmatched"
 		}

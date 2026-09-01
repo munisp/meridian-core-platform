@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 )
 
 type jwksKey struct {
@@ -61,7 +62,7 @@ func newKeycloakVerifier() (*keycloakVerifier, error) {
 		jwksURL:  url,
 		issuer:   issuer,
 		audience: audience,
-		client:   &http.Client{Timeout: 3 * time.Second},
+		client:   &http.Client{Timeout: 3 * time.Second, Transport: otelx.Client(nil)},
 		keys:     map[string]*rsa.PublicKey{},
 	}
 	if err := v.refresh(); err != nil {

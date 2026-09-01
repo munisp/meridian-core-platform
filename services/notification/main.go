@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/envelope"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
@@ -101,7 +103,7 @@ type WebhookProvider struct {
 
 // NewWebhookProvider creates the real provider pointed at url.
 func NewWebhookProvider(url string) *WebhookProvider {
-	return &WebhookProvider{url: url, client: &http.Client{Timeout: 10 * time.Second}}
+	return &WebhookProvider{url: url, client: &http.Client{Timeout: 10 * time.Second, Transport: otelx.Client(nil)}}
 }
 
 // Name implements Provider.
@@ -163,6 +165,11 @@ func (s *server) providerFor(channel string) Provider {
 }
 
 func main() {
+	// OTel bootstrap (DESIGN-CONTRACT): fail-soft — no OTLP endpoint means
+	// no-op providers; PROFILE=prod without one logs a loud warning.
+	otelProv := otelx.InitProvidersFor(context.Background(), service, version)
+	defer otelProv.Shutdown(context.Background())
+
 	dir := httpx.Env("DATA_DIR", "./data")
 	st, err := store.OpenFromEnv(dir)
 	if err != nil {

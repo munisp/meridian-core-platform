@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 )
 
 // Business KYB data model (audit O1/O7): directors and ultimate beneficial
@@ -115,7 +116,7 @@ type CACHTTPAdapter struct {
 
 // NewCACHTTPAdapter builds the adapter.
 func NewCACHTTPAdapter(base, apiKey string) *CACHTTPAdapter {
-	return &CACHTTPAdapter{base: strings.TrimRight(base, "/"), apiKey: apiKey, hc: &http.Client{Timeout: 10 * time.Second}}
+	return &CACHTTPAdapter{base: strings.TrimRight(base, "/"), apiKey: apiKey, hc: &http.Client{Timeout: 10 * time.Second, Transport: otelx.Client(nil)}}
 }
 
 func cacHMAC(key, value string) string {
@@ -171,7 +172,7 @@ type NINHTTPAdapter struct {
 
 // NewNINHTTPAdapter builds the adapter.
 func NewNINHTTPAdapter(base, apiKey string) *NINHTTPAdapter {
-	return &NINHTTPAdapter{base: strings.TrimRight(base, "/"), apiKey: apiKey, hc: &http.Client{Timeout: 10 * time.Second}}
+	return &NINHTTPAdapter{base: strings.TrimRight(base, "/"), apiKey: apiKey, hc: &http.Client{Timeout: 10 * time.Second, Transport: otelx.Client(nil)}}
 }
 
 // Verify implements NINAdapter against the real NIMC API.

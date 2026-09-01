@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"os"
 	"time"
@@ -68,9 +69,14 @@ func validateAuthConfig(authMode, jwtSecret string) error {
 }
 
 func main() {
+	// OTel bootstrap (DESIGN-CONTRACT): fail-soft — no OTLP endpoint means
+	// no-op providers; PROFILE=prod without one logs a loud warning.
+	otelProv := otelx.InitProvidersFor(context.Background(), "admin-api", version)
+	defer otelProv.Shutdown(context.Background())
+
 	a := &app{
 		store:     NewStore(),
-		client:    &http.Client{Timeout: 1200 * time.Millisecond},
+		client:    &http.Client{Timeout: 1200 * time.Millisecond, Transport: otelx.Client(nil)},
 		jwtSecret: envOr("MERIDIAN_DEV_JWT_SECRET", "meridian-dev-secret-change-me"),
 		authMode:  envOr("AUTH_MODE", "dev"),
 	}

@@ -110,6 +110,20 @@ func InitProviders(ctx context.Context) *Providers {
 	return InitProvidersWith(ctx, ConfigFromEnv())
 }
 
+// InitProvidersFor is InitProviders with the caller's service name/version
+// as defaults: OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION still win when set,
+// so every service boots with a sane service.name without extra env wiring.
+func InitProvidersFor(ctx context.Context, service, version string) *Providers {
+	cfg := ConfigFromEnv()
+	if cfg.Service == "unknown-service" {
+		cfg.Service = service
+	}
+	if cfg.Version == "0.0.0" && version != "" {
+		cfg.Version = version
+	}
+	return InitProvidersWith(ctx, cfg)
+}
+
 // InitProvidersWith is InitProviders against an explicit Config (tests).
 func InitProvidersWith(ctx context.Context, cfg Config) *Providers {
 	if cfg.Endpoint == "" {
