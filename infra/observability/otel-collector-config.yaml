@@ -1,0 +1,119 @@
+# Meridian platform — OpenTelemetry Collector config (otel-foundation wave).
+#
+# Image: otel/opentelemetry-collector-contrib (contrib receivers below are
+# contrib-only: kafkametrics, redis, postgresql, opensearch). Deploy:
+#   mount at /etc/otelcol-contrib/config.yaml
+#
+# Honest status notes:
+#  - temporal: there is NO contrib temporal receiver; Temporal metrics are
+#    scraped by the Prometheus server (prometheus.yml job `temporal`) once the
+#    server metrics listen-address is enabled. Not collected here.
+#  - tigerbeetle: no contrib receiver and TigerBeetle does not expose a
+#    metrics endpoint; only pipeline health is observable. Not collected.
+#  - alerting: there is no upstream alertmanager exporter; alert flow is
+#    collector -> prometheus exporter -> Prometheus rules (alerts.yml) ->
+#    Alertmanager. The `prometheus` exporter below re-exposes everything on
+#    :9464/metrics for the Prometheus server to scrape.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Scrape the existing app /metrics listeners (METRICS_PORT, httpx/metrics.go)
+  # so the collector is a single aggregation point. Targets match
+  # docker-compose.prod.yml service names; override per deploy.
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: meridian-apps
+          scrape_interval: 30s
+          static_configs:
+            - targets:
+                - ledger:9460
+                - admin-api:9461
+                - consent:9462
+                - notification:9463
+                - search-indexer:9464
+                - audit-evidence:9465
+
+  # Kafka/Redpanda broker + topic + consumer-group metrics (contrib).
+  kafkametrics:
+    brokers: [redpanda:9092]
+    protocol_version: 2.0.0
+    scrapers: [brokers, topics, consumers]
+
+  redis:
+    endpoint: redis:6379
+    collection_interval: 30s
+
+  postgresql:
+    endpoint: postgres:5432
+    username: meridian
+    password: ${env:OTELCOL_PG_PASSWORD}
+    databases: [meridian]
+    collection_interval: 30s
+    tls:
+      insecure: true
+
+  opensearch:
+    endpoint: http://opensearch:9200
+    collection_interval: 30s
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+  # Tenant enrichment: copy the tenant.id span attribute onto the resource so
+  # per-tenant series/routing is possible downstream. Uses the transform
+  # processor (contrib). No-op when tenant.id is absent.
+  transform/tenant:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(resource.attributes["tenant.id"], attributes["tenant.id"]) where attributes["tenant.id"] != nil
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(resource.attributes["tenant.id"], attributes["tenant.id"]) where attributes["tenant.id"] != nil
+
+exporters:
+  # Re-expose all metrics in Prometheus format for the existing Prometheus
+  # server (single scrape of the collector replaces per-receiver wiring).
+  prometheus:
+    endpoint: 0.0.0.0:9464
+    resource_to_telemetry_conversion:
+      enabled: true   # tenant.id / service.name become metric labels
+
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+service:
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888   # collector self-metrics; alerts.yml watches up{}
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/tenant, batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp, prometheus, kafkametrics, redis, postgresql, opensearch]
+      processors: [memory_limiter, transform/tenant, batch]
+      exporters: [prometheus, debug]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]

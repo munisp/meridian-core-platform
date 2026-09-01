@@ -6,6 +6,8 @@
 //! NOTE: embedded boundaries are [seed] coarse polygons, not survey-grade.
 //! Toolchain unavailable in build env — verified by review, not cargo build.
 
+mod telemetry;
+
 use axum::{extract::Path, http::StatusCode, response::Json, routing::{get, post}, Router};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -228,6 +230,7 @@ async fn boundaries(
 
 #[tokio::main]
 async fn main() {
+    let _telemetry = telemetry::init_telemetry();
     let engine = std::sync::Arc::new(Engine {
         states: parse_features(STATES_GEOJSON, "state"),
         lgas: parse_features(LGAS_GEOJSON, "lga"),
@@ -238,7 +241,8 @@ async fn main() {
         .route("/v1/attribution/point", post(point))
         .route("/v1/attribution/batch", post(batch))
         .route("/v1/boundaries/{level}", get(boundaries))
-        .with_state(engine);
+        .with_state(engine)
+        .layer(axum::middleware::from_fn(telemetry::tenant_span_middleware));
     let port = std::env::var("PORT").unwrap_or_else(|_| "8100".to_string());
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await

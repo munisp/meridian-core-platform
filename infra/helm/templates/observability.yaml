@@ -178,4 +178,70 @@ spec:
   selector: {app: grafana}
   ports:
     - {name: http, port: 3000, targetPort: 3000}
+---
+# OTel collector (otel-foundation wave): single OTLP ingress + Prometheus
+# re-export. Config is the same file used by docker-compose (embedded so
+# helm and compose cannot drift).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: monitoring
+data:
+  config.yaml: |
+{{ .Files.Get "files/otel-collector-config.yaml" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: monitoring
+  labels: {app: otel-collector}
+spec:
+  replicas: {{ .Values.observability.otelcol.replicas | default 1 }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: otel-collector}
+  template:
+    metadata:
+      labels: {app: otel-collector}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: otel-collector
+          image: {{ .Values.observability.otelcol.image | default "otel/opentelemetry-collector-contrib:0.111.0" }}
+          args: ["--config=/etc/otelcol-contrib/config.yaml"]
+          env:
+            - name: OTELCOL_PG_PASSWORD
+              valueFrom: {secretKeyRef: {name: meridian-postgres, key: password}}
+          ports:
+            - {containerPort: 4317, protocol: TCP}
+            - {containerPort: 4318, protocol: TCP}
+            - {containerPort: 9464, protocol: TCP}
+            - {containerPort: 8888, protocol: TCP}
+          readinessProbe:
+            httpGet: {path: /, port: 8888}
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol-contrib, readOnly: true}
+          resources:
+            requests: {cpu: "100m", memory: 256Mi}
+            limits: {cpu: "500m", memory: 768Mi}  # keep > memory_limiter limit_mib=512
+      volumes:
+        - name: config
+          configMap: {name: otel-collector-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: monitoring
+spec:
+  selector: {app: otel-collector}
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: 4317}
+    - {name: otlp-http, port: 4318, targetPort: 4318}
+    - {name: prom, port: 9464, targetPort: 9464}
+    - {name: self-metrics, port: 8888, targetPort: 8888}
 {{- end }}

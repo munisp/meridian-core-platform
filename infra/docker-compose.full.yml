@@ -69,6 +69,63 @@ services:
     image: bitnami/etcd:3.5
     environment: [ALLOW_NONE_AUTHENTICATION=yes]
     ports: ["2379:2379"]
+
+  # ---- otel-foundation wave: collector + alertmanager -------------------
+  # Receives OTLP (4317 grpc / 4318 http), re-exports Prometheus on :9464.
+  # Config: observability/otel-collector-config.yaml. Set OTELCOL_PG_PASSWORD.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      - OTELCOL_PG_PASSWORD=${OTELCOL_PG_PASSWORD:-meridian}
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports: ["4317:4317", "4318:4318", "9464:9464", "8888:8888"]
+    depends_on: [redpanda, redis, postgres, opensearch]
+
+  # Config contains ${ENV} placeholders: render with envsubst into
+  # observability/.alertmanager.rendered.yml before starting (see file header).
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./observability/.alertmanager.rendered.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports: ["9093:9093"]
+
+
+  # ---- otel-foundation wave: provisioned middleware (NOT active by default
+  # where profile-gated; see docs/integrations/<name>.md) -------------------
+  dapr-placement:
+    image: daprio/placement:1.14
+    profiles: ["dapr"]            # opt-in: Dapr control plane not installed
+    ports: ["50005:50005"]
+
+  mojaloop-simulator:             # SIM only — no live scheme adapter (docs)
+    image: mojaloop/simulator:v12.0.0
+    profiles: ["interop"]
+    environment: [SIM_PROFILE=merchant-payment]
+    ports: ["8444:8444"]
+
+  opensearch-dashboards:          # companion UI for the existing opensearch
+    image: opensearchproject/opensearch-dashboards:2.13.0
+    environment:
+      - OPENSEARCH_HOSTS=http://opensearch:9200
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports: ["5601:5601"]
+    depends_on: [opensearch]
+
+  openappsec-agent:               # WAF agent; APISIX plugin NOT enabled yet
+    image: ghcr.io/openappsec/agent:latest
+    profiles: ["security"]
+    environment: [AGENT_MODE=local]
+
+  geolibre:                       # placeholder image — docs/integrations/geolibre.md
+    image: geolibre/server:latest
+    profiles: ["geo-maps"]
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+    ports: ["8088:8080"]
+
 volumes:
   pgdata: {}
   tbdata: {}

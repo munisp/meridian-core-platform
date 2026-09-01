@@ -1,0 +1,22 @@
+# Fluvio streaming topics — rendered only when .Values.fluvio.enabled.
+# STATUS: provisioned skeleton; the Fluvio SC itself is installed out-of-band
+# via the fluvio helm chart (see docs/integrations/fluvio.md).
+{{- if .Values.fluvio.enabled }}
+apiVersion: fluvio.infinyon.com/v2
+kind: Topic
+metadata:
+  name: meridian-events
+  namespace: {{ .Release.Namespace }}
+spec:
+  partitions: {{ .Values.fluvio.partitions | default 3 }}
+  replicas: {{ .Values.fluvio.replicas | default 1 }}
+---
+apiVersion: fluvio.infinyon.com/v2
+kind: Topic
+metadata:
+  name: meridian-dlq
+  namespace: {{ .Release.Namespace }}
+spec:
+  partitions: 1
+  replicas: 1
+{{- end }}

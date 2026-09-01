@@ -1,0 +1,17 @@
+# Dapr pub/sub component over the existing Redpanda (Kafka API).
+# STATUS: provisioned, NOT active — no service enables the Dapr sidecar yet
+# (see docs/integrations/dapr.md). Applied via helm templates/dapr-components.yaml.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: meridian-pubsub
+spec:
+  type: pubsub.kafka
+  version: v1
+  metadata:
+    - name: brokers
+      value: redpanda:9092
+    - name: consumerGroup
+      value: meridian-dapr
+    - name: authType
+      value: none

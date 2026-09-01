@@ -61,14 +61,16 @@ scrape_configs:
         labels: {instrumented: "false"}  # pending: metrics endpoint not yet enabled in compose
 
   # ---------------------------------------------------------- app services
-  # Ports verified in source (httpx.Port(...) / uvicorn defaults). None of
-  # these services expose /metrics today — PENDING INSTRUMENTATION. Targets are
-  # kept so that `up` and the pending-instrumentation panels are honest, but
-  # they are excluded from paging alerts via instrumented="false".
+  # Go services expose Prometheus /metrics on a DEDICATED listener
+  # (packages/events/httpx metrics.go; set METRICS_PORT=9090 in the service
+  # env — deliberately NOT on the public route table). Scrape the metrics
+  # port. rules-engine (Python), rp-registry, geo, notification,
+  # search-indexer, migration and reg-watch remain PENDING INSTRUMENTATION
+  # (instrumented="false", excluded from paging alerts).
   - job_name: admin-api            # services/admin-api/main.go PORT default 8095
     static_configs:
-      - targets: ["admin-api:8095"]
-        labels: {instrumented: "false"}
+      - targets: ["admin-api:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+        labels: {instrumented: "true"}
   - job_name: rules-engine         # services/rules-engine/app/main.py PORT default 8001
     static_configs:
       - targets: ["rules-engine:8001"]
@@ -79,12 +81,12 @@ scrape_configs:
         labels: {instrumented: "false"}
   - job_name: tin-graph            # services/tin-graph/main.go PORT default 8003
     static_configs:
-      - targets: ["tin-graph:8003"]
-        labels: {instrumented: "false"}
+      - targets: ["tin-graph:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+        labels: {instrumented: "true"}
   - job_name: audit-evidence       # services/audit-evidence/main.go PORT default 8004
     static_configs:
-      - targets: ["audit-evidence:8004"]
-        labels: {instrumented: "false"}
+      - targets: ["audit-evidence:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+        labels: {instrumented: "true"}
   - job_name: geo                  # services/geo/main.go PORT default 8005
     static_configs:
       - targets: ["geo:8005"]
@@ -95,20 +97,20 @@ scrape_configs:
         labels: {instrumented: "false"}
   - job_name: consent              # services/consent/main.go PORT default 8007
     static_configs:
-      - targets: ["consent:8007"]
-        labels: {instrumented: "false"}
+      - targets: ["consent:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+        labels: {instrumented: "true"}
   - job_name: search-indexer       # services/search-indexer/main.go PORT default 8008
     static_configs:
       - targets: ["search-indexer:8008"]
         labels: {instrumented: "false"}
   - job_name: edge-policy          # services/edge-policy/main.go PORT default 8009
     static_configs:
-      - targets: ["edge-policy:8009"]
-        labels: {instrumented: "false"}
+      - targets: ["edge-policy:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+        labels: {instrumented: "true"}
   - job_name: ledger               # services/ledger/main.go PORT default 8010
     static_configs:
-      - targets: ["ledger:8010"]
-        labels: {instrumented: "false"}
+      - targets: ["ledger:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+        labels: {instrumented: "true"}
   - job_name: migration            # services/migration/main.go PORT default 8011
     static_configs:
       - targets: ["migration:8011"]
@@ -130,3 +132,11 @@ scrape_configs:
   # topics, no service). Job intentionally omitted; add when the service lands.
   # The str_dlq_depth / str_submission_errors_total alerts in alerts.yml are
   # tagged instrumentation: pending accordingly.
+
+  # OTel collector (otel-foundation wave): re-exports all OTLP metrics in
+  # Prometheus format on :9464 and self-metrics on :8888. Single scrape
+  # point that also carries tenant.id labels (resource_to_telemetry_conversion).
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:9464", "otel-collector:8888"]
+        labels: {instrumented: "true"}
