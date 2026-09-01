@@ -151,13 +151,16 @@ func Serve(srv *http.Server) error {
 	}
 }
 
-// NewServer builds the standard service server: logging + panic recovery and
-// full timeout defaults (F-5: ReadHeaderTimeout alone leaves body-read
-// slowloris exposure).
+// NewServer builds the standard service server: OTel server spans (DESIGN-
+// CONTRACT: one span per request, route-template name, tenant.id attribute),
+// logging + panic recovery and full timeout defaults (F-5: ReadHeaderTimeout
+// alone leaves body-read slowloris exposure). With no OTLP endpoint
+// configured the otelx middleware is a pass-through on no-op providers, so
+// behaviour is unchanged when telemetry is disabled.
 func NewServer(addr string, h http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
-		Handler:           Recover(Logging(h)),
+		Handler:           Recover(Logging(OTel(h))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
