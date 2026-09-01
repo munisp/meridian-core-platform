@@ -103,7 +103,7 @@ type WebhookProvider struct {
 
 // NewWebhookProvider creates the real provider pointed at url.
 func NewWebhookProvider(url string) *WebhookProvider {
-	return &WebhookProvider{url: url, client: &http.Client{Timeout: 10 * time.Second}}
+	return &WebhookProvider{url: url, client: &http.Client{Timeout: 10 * time.Second, Transport: otelx.Client(nil)}}
 }
 
 // Name implements Provider.

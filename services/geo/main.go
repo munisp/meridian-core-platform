@@ -52,7 +52,7 @@ func main() {
 	s := &server{
 		ds:    ds,
 		geoRS: httpx.Env("GEO_RS_URL", ""),
-		hc:    &http.Client{Timeout: 3 * time.Second},
+		hc:    &http.Client{Timeout: 3 * time.Second, Transport: otelx.Client(nil)},
 	}
 
 	// DATABASE_URL selects the PostGIS engine (real ST_* queries); the

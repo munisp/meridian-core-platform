@@ -192,7 +192,7 @@ func main() {
 	}
 	var live mig.LiveIndex
 	if base := os.Getenv("TIN_GRAPH_URL"); base != "" {
-		live = &httpLiveIndex{base: strings.TrimRight(base, "/"), token: os.Getenv("TIN_GRAPH_TOKEN"), hc: &http.Client{Timeout: 10 * time.Second}}
+		live = &httpLiveIndex{base: strings.TrimRight(base, "/"), token: os.Getenv("TIN_GRAPH_TOKEN"), hc: &http.Client{Timeout: 10 * time.Second, Transport: otelx.Client(nil)}}
 		log.Printf("live tin-graph checks via %s", base)
 	} else {
 		if os.Getenv("PROFILE") == "prod" {
