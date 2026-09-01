@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"github.com/munisp/meridian-core-platform/services/tin-graph/internal/graph"
@@ -44,7 +45,7 @@ type taxpayer360 struct {
 	RiskScores section360 `json:"risk_scores"`
 }
 
-var downstreamClient = &http.Client{Timeout: 3 * time.Second}
+var downstreamClient = &http.Client{Timeout: 3 * time.Second, Transport: otelx.Client(nil)}
 
 // fetchJSON GETs a downstream JSON endpoint, injecting the caller's bearer
 // token so downstream auth sees the same principal.

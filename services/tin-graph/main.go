@@ -80,7 +80,7 @@ func loadMatchConfig() graph.MatchConfig {
 
 // packFetchClient bounds the dev pack-config fetch (QA-29): a bare http.Get
 // has no timeout and can hang the startup/load path indefinitely.
-var packFetchClient = &http.Client{Timeout: 10 * time.Second}
+var packFetchClient = &http.Client{Timeout: 10 * time.Second, Transport: otelx.Client(nil)}
 
 func fetchPackConfig(url string) (*graph.MatchConfig, error) {
 	resp, err := packFetchClient.Get(url) // dev only; prod goes through mTLS client

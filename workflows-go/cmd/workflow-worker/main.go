@@ -32,7 +32,7 @@ import (
 	workflows "github.com/munisp/meridian-core-platform/workflows-go"
 )
 
-var httpClient = &http.Client{Timeout: 15 * time.Second}
+var httpClient = &http.Client{Timeout: 15 * time.Second, Transport: otelx.Client(nil)}
 
 // planePost POSTs payload as JSON to base+path and requires a 2xx. base is
 // read from envVar; unset envVar is a hard activity error (honest failure).
