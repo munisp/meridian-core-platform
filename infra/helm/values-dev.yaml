@@ -59,3 +59,23 @@ workloads:
 # docker-compose profile carries prometheus/alertmanager/grafana locally.
 observability:
   enabled: false
+
+# otel-foundation wave middleware gates (all default OFF — provisioned only;
+# see docs/integrations/<name>.md for activation steps).
+dapr:
+  enabled: false
+  samplingRate: "0.1"
+fluvio:
+  enabled: false
+  partitions: 3
+  replicas: 1
+mojaloop:
+  enabled: false        # simulator adapter only; live switch is NOT provisioned
+opensearchDashboards:
+  enabled: false
+openappsec:
+  enabled: false        # APISIX agent attachment, helm-only
+geolibre:
+  enabled: false
+lakehouse:
+  otelEndpoint: ""      # ml/ pipelines pick this up when set (OTEL_EXPORTER_OTLP_ENDPOINT)

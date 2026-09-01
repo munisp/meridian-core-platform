@@ -1,0 +1,10 @@
+# Canonical Dapr sidecar annotation set for Meridian services.
+# STATUS: reference set; NOT applied to any service yet (opt-in per service).
+dapr.io/enabled: "true"
+dapr.io/app-id: "<service-name>"
+dapr.io/app-port: "<service-port>"
+dapr.io/config: "meridian-tracing"
+dapr.io/log-level: "warn"
+dapr.io/enable-api-logging: "false"
+# Companion Configuration CR (rendered by helm templates/dapr-components.yaml):
+#   tracing: {samplingRate: "0.1", otel: {endpointAddress: otel-collector:4317, isSecure: false}}
