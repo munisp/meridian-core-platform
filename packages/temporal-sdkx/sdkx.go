@@ -93,8 +93,10 @@ func ExecuteActivity(ctx context.Context, reg *ActivityRegistry, policy RetryPol
 	if policy.MaximumAttempts <= 0 {
 		policy.MaximumAttempts = 1
 	}
+	ctx, span := startSpan(ctx, "activity", name)
 	var err error
 	var out any
+	defer func() { endSpan(span, err) }()
 	for attempt := 1; attempt <= policy.MaximumAttempts; attempt++ {
 		out, err = act(ctx, input)
 		if err == nil {
@@ -142,7 +144,9 @@ func (s *Saga) Run(ctx context.Context, input any) error {
 	}
 	var completed []done
 	for i, step := range s.Steps {
-		out, err := step.Action(ctx, input)
+		stepCtx, stepSpan := startSpan(ctx, "saga_step", step.Name)
+		out, err := step.Action(stepCtx, input)
+		endSpan(stepSpan, err)
 		if err != nil {
 			s.log("saga: step %d (%s) failed: %v; compensating %d steps", i, step.Name, err, len(completed))
 			var compErrs []error
@@ -227,7 +231,9 @@ func (r *InprocRunner) Execute(ctx context.Context, name string, input any) (any
 		return nil, fmt.Errorf("workflow %q not registered", name)
 	}
 	rec := RunRecord{WorkflowID: id, Name: name, StartedAt: time.Now().UTC()}
-	out, err := wf(ctx, input)
+	wfCtx, span := startSpan(ctx, "workflow", name)
+	out, err := wf(wfCtx, input)
+	endSpan(span, err)
 	rec.EndedAt = time.Now().UTC()
 	rec.Duration = rec.EndedAt.Sub(rec.StartedAt)
 	if err != nil {
