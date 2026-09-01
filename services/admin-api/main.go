@@ -76,7 +76,7 @@ func main() {
 
 	a := &app{
 		store:     NewStore(),
-		client:    &http.Client{Timeout: 1200 * time.Millisecond},
+		client:    &http.Client{Timeout: 1200 * time.Millisecond, Transport: otelx.Client(nil)},
 		jwtSecret: envOr("MERIDIAN_DEV_JWT_SECRET", "meridian-dev-secret-change-me"),
 		authMode:  envOr("AUTH_MODE", "dev"),
 	}

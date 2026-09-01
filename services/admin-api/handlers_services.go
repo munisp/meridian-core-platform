@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 )
 
 // ---------- service registry + health rollup (SPEC §2) ----------
@@ -136,7 +137,7 @@ func (a *app) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if req.Header.Get("X-Dev-Role") == "" {
 		req.Header.Set("X-Dev-Role", "admin")
 	}
-	proxyClient := &http.Client{Timeout: 15 * time.Second}
+	proxyClient := &http.Client{Timeout: 15 * time.Second, Transport: otelx.Client(nil)}
 	resp, err := proxyClient.Do(req)
 	if err != nil {
 		writeProblem(w, http.StatusBadGateway, "downstream unreachable",

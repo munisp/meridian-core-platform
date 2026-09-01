@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 )
 
 // ---------- rule packs (rp-registry with dev-seed fallback) ----------
@@ -267,7 +268,7 @@ func (a *app) httpClient() *http.Client {
 	if a.client != nil {
 		return a.client
 	}
-	return &http.Client{Timeout: 5 * time.Second}
+	return &http.Client{Timeout: 5 * time.Second, Transport: otelx.Client(nil)}
 }
 
 // auditFlushLoop retries queued WORM forwards until they land.
