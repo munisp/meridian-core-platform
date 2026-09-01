@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
 	"github.com/munisp/meridian-core-platform/packages/events/store"
@@ -37,6 +39,11 @@ func deriveChainKey(sealKey string) string {
 }
 
 func main() {
+	// OTel bootstrap (DESIGN-CONTRACT): fail-soft — no OTLP endpoint means
+	// no-op providers; PROFILE=prod without one logs a loud warning.
+	otelProv := otelx.InitProvidersFor(context.Background(), service, version)
+	defer otelProv.Shutdown(context.Background())
+
 	dir := httpx.Env("DATA_DIR", "./data")
 	// A5: dedicated seal/chain keys. PROFILE=prod REQUIRES TAT_SEAL_KEY —
 	// no dev-secret default in prod (fail closed at startup).
