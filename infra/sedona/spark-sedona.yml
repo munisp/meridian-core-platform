@@ -1,0 +1,19 @@
+# Apache Sedona (Spark geo runtime) — batch geo profile, NOT part of the
+# default stack. Run: docker compose -f docker-compose.full.yml -f
+# infra/sedona/spark-sedona.yml --profile geo-batch up sedona-spark
+# STATUS: provisioned profile; no geo job is wired to it yet
+# (docs/integrations/sedona.md).
+name: meridian-core
+services:
+  sedona-spark:
+    image: apache/sedona:1.6.0
+    profiles: ["geo-batch"]
+    environment:
+      # OTel javaagent wiring is opt-in: mount the agent jar and uncomment.
+      # - JAVA_TOOL_OPTIONS=-javaagent:/opt/otel/opentelemetry-javaagent.jar
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-otel-collector:4317}
+      - OTEL_SERVICE_NAME=sedona-spark
+      - SPARK_MASTER=local[*]
+    ports: ["4040:4040"]
+    volumes:
+      - ./sedona/jobs:/opt/sedona/jobs:ro

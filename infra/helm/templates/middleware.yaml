@@ -1,0 +1,112 @@
+# otel-foundation wave middleware deployments. ALL are gated OFF by default
+# (.Values.<name>.enabled = false) — provisioned templates, nothing here is
+# claimed active. See docs/integrations/<name>.md for what each switch does.
+
+# Mojaloop adapter — SIMULATOR profile only. There is no live Mojaloop
+# scheme adapter wiring; this runs the mojaloop simulator for interop testing.
+{{- if .Values.mojaloop.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mojaloop-simulator
+  namespace: {{ .Release.Namespace }}
+  labels: {app: mojaloop-simulator}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mojaloop-simulator}
+  template:
+    metadata:
+      labels: {app: mojaloop-simulator}
+    spec:
+      containers:
+        - name: simulator
+          image: mojaloop/simulator:v12.0.0
+          ports: [{containerPort: 8444}]
+          env:
+            - {name: SIM_PROFILE, value: "merchant-payment"}   # sim only, NOT live
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mojaloop-simulator
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector: {app: mojaloop-simulator}
+  ports: [{name: http, port: 8444, targetPort: 8444}]
+{{- end }}
+
+# OpenSearch Dashboards companion for the existing opensearch instance.
+{{- if .Values.opensearchDashboards.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-dashboards
+  namespace: {{ .Release.Namespace }}
+  labels: {app: opensearch-dashboards}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: opensearch-dashboards}
+  template:
+    metadata:
+      labels: {app: opensearch-dashboards}
+    spec:
+      containers:
+        - name: dashboards
+          image: opensearchproject/opensearch-dashboards:2.13.0
+          ports: [{containerPort: 5601}]
+          env:
+            - {name: OPENSEARCH_HOSTS, value: "http://opensearch:9200"}
+            - {name: DISABLE_SECURITY_DASHBOARDS_PLUGIN, value: "true"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-dashboards
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector: {app: opensearch-dashboards}
+  ports: [{name: http, port: 5601, targetPort: 5601}]
+{{- end }}
+
+# GeoLibre map server — geoserver-style OGC WMS/WFS deployment pattern.
+# STATUS: placeholder image pin pending the GeoLibre repo README; marked
+# provisioned-only. Replace image with the published GeoLibre image at
+# activation time.
+{{- if .Values.geolibre.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: geolibre
+  namespace: {{ .Release.Namespace }}
+  labels: {app: geolibre}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: geolibre}
+  template:
+    metadata:
+      labels: {app: geolibre}
+    spec:
+      containers:
+        - name: geolibre
+          image: geolibre/server:latest   # PLACEHOLDER — confirm against GeoLibre README before enabling
+          ports: [{containerPort: 8080}]
+          env:
+            - {name: GEOLIBRE_DATA_DIR, value: /data}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "otel-collector.monitoring:4317"}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: geolibre
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector: {app: geolibre}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+{{- end }}

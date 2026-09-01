@@ -92,6 +92,40 @@ services:
       - ./observability/.alertmanager.rendered.yml:/etc/alertmanager/alertmanager.yml:ro
     ports: ["9093:9093"]
 
+
+  # ---- otel-foundation wave: provisioned middleware (NOT active by default
+  # where profile-gated; see docs/integrations/<name>.md) -------------------
+  dapr-placement:
+    image: daprio/placement:1.14
+    profiles: ["dapr"]            # opt-in: Dapr control plane not installed
+    ports: ["50005:50005"]
+
+  mojaloop-simulator:             # SIM only — no live scheme adapter (docs)
+    image: mojaloop/simulator:v12.0.0
+    profiles: ["interop"]
+    environment: [SIM_PROFILE=merchant-payment]
+    ports: ["8444:8444"]
+
+  opensearch-dashboards:          # companion UI for the existing opensearch
+    image: opensearchproject/opensearch-dashboards:2.13.0
+    environment:
+      - OPENSEARCH_HOSTS=http://opensearch:9200
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports: ["5601:5601"]
+    depends_on: [opensearch]
+
+  openappsec-agent:               # WAF agent; APISIX plugin NOT enabled yet
+    image: ghcr.io/openappsec/agent:latest
+    profiles: ["security"]
+    environment: [AGENT_MODE=local]
+
+  geolibre:                       # placeholder image — docs/integrations/geolibre.md
+    image: geolibre/server:latest
+    profiles: ["geo-maps"]
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+    ports: ["8088:8080"]
+
 volumes:
   pgdata: {}
   tbdata: {}
