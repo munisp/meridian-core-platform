@@ -31,6 +31,8 @@ type app struct {
 	// service are queued and retried (never silently dropped).
 	auditMu    sync.Mutex
 	auditQueue []AuditEvent
+	// R4-9c: TOTP step-up state (nil until initStepup).
+	stepup *stepupState
 }
 
 func envOr(key, def string) string {
@@ -106,6 +108,10 @@ func main() {
 		log.Fatalf("component=admin-api FATAL: %v", err)
 	}
 	a.perm = perm
+	// R4-9c: TOTP step-up (fail-closed in prod without seal/ticket keys).
+	if err := a.initStepup(); err != nil {
+		log.Fatalf("component=admin-api FATAL: %v", err)
+	}
 	// apply env URL overrides to the service registry
 	a.store.mu.Lock()
 	for _, svc := range a.store.Services {
@@ -179,9 +185,17 @@ func main() {
 	// B2-#11: maker/checker separation on ledger money routes — the maker
 	// (operator) creates a pending transfer; only a distinct checker role
 	// (admin) may post or void it. Same-role maker+checker is rejected.
-	auth("POST /v1/admin/ledger/transfers", a.requireRole("operator", a.handleLedgerTransfer))
-	auth("POST /v1/admin/ledger/transfers/{id}/post", a.requireRole("admin", a.handleLedgerPost))
-	auth("POST /v1/admin/ledger/transfers/{id}/void", a.requireRole("admin", a.handleLedgerVoid))
+	// R4-9c: ledger money routes additionally require TOTP step-up
+	// (X-Stepup-Code) or a single-use step-up ticket (X-Stepup-Ticket).
+	auth("POST /v1/admin/ledger/transfers", a.requireRole("operator", a.requireStepUp("admin.ledger.transfer", a.handleLedgerTransfer)))
+	auth("POST /v1/admin/ledger/transfers/{id}/post", a.requireRole("admin", a.requireStepUp("admin.ledger.post", a.handleLedgerPost)))
+	auth("POST /v1/admin/ledger/transfers/{id}/void", a.requireRole("admin", a.requireStepUp("admin.ledger.void", a.handleLedgerVoid)))
+
+	// R4-9c: step-up enrollment lifecycle (admin role)
+	auth("POST /v1/stepup/enroll", a.handleStepupEnroll)
+	auth("POST /v1/stepup/confirm", a.handleStepupConfirm)
+	auth("POST /v1/stepup/challenge", a.handleStepupChallenge)
+	auth("POST /v1/stepup/disable", a.requireRole("admin", a.handleStepupDisable))
 	auth("GET /v1/admin/ledger/recon-breaks", a.handleReconBreaks)
 
 	auth("GET /v1/admin/workflows", a.handleWorkflows)
