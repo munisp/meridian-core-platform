@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/munisp/meridian-core-platform/packages/events v0.0.0
+	github.com/munisp/meridian-core-platform/packages/stepup v0.0.0
 	github.com/munisp/meridian-core-platform/packages/temporal-sdkx v0.0.0
 	github.com/tigerbeetle/tigerbeetle-go v0.16.17
 )
@@ -16,5 +17,7 @@ require (
 )
 
 replace github.com/munisp/meridian-core-platform/packages/events => ../../packages/events
+
+replace github.com/munisp/meridian-core-platform/packages/stepup => ../../packages/stepup
 
 replace github.com/munisp/meridian-core-platform/packages/temporal-sdkx => ../../packages/temporal-sdkx

@@ -166,14 +166,21 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /v1/accounts", auth.RequireRole("ledger:admin", s.createAccounts))
 	mux.HandleFunc("GET /v1/accounts", s.listAccounts)
 	mux.HandleFunc("GET /v1/accounts/{id}/balance", s.getBalance)
-	mux.HandleFunc("POST /v1/transfers", auth.RequireRole("ledger:post", s.createTransfer))
+	// R4-9c: money-mutation routes additionally require a step-up ticket
+	// (X-Stepup-Ticket from admin-api /v1/stepup/challenge). Dev profile
+	// bypasses with a loud log; prod fails closed (403 step_up_required).
+	gate, err := newStepupGate()
+	if err != nil {
+		log.Fatalf("component=ledger FATAL: %v", err)
+	}
+	mux.HandleFunc("POST /v1/transfers", auth.RequireRole("ledger:post", gate.requireStepUp("ledger.transfer.create", s.createTransfer)))
 	// B2-#12: maker/checker separation — pending creation (maker,
 	// "ledger:post") and settle/release (checker, "ledger:settle") require
 	// DISTINCT roles so a single compromised maker credential cannot both
 	// create and finalise a movement.
-	mux.HandleFunc("POST /v1/transfers/pending", auth.RequireRole("ledger:post", s.createPending))
-	mux.HandleFunc("POST /v1/transfers/{id}/post", auth.RequireRole("ledger:settle", s.postPending))
-	mux.HandleFunc("POST /v1/transfers/{id}/void", auth.RequireRole("ledger:settle", s.voidPending))
+	mux.HandleFunc("POST /v1/transfers/pending", auth.RequireRole("ledger:post", gate.requireStepUp("ledger.transfer.pending", s.createPending)))
+	mux.HandleFunc("POST /v1/transfers/{id}/post", auth.RequireRole("ledger:settle", gate.requireStepUp("ledger.transfer.post", s.postPending)))
+	mux.HandleFunc("POST /v1/transfers/{id}/void", auth.RequireRole("ledger:settle", gate.requireStepUp("ledger.transfer.void", s.voidPending)))
 	mux.HandleFunc("GET /v1/transfers", s.listTransfers)
 	mux.HandleFunc("GET /v1/transfers/{id}", s.getTransfer)
 	return mux

@@ -41,6 +41,12 @@ func (c Claims) HasRole(role string) bool {
 	return false
 }
 
+// ContextWithClaims returns a context carrying c, as Middleware would.
+// Exported for middleware composition and tests.
+func ContextWithClaims(ctx context.Context, c Claims) context.Context {
+	return context.WithValue(ctx, ctxKey{}, c)
+}
+
 // FromContext extracts claims placed by Middleware.
 func FromContext(ctx context.Context) (Claims, bool) {
 	c, ok := ctx.Value(ctxKey{}).(Claims)
