@@ -12,8 +12,8 @@ provenance:
   source_citation: VAT Act, Second Schedule (zero-rated goods and services); Finance Act 2020 amendments
 signed:
   algorithm: ed25519
-  key_id: meridian-ceremony-dev-002
-  signature: d6aff62dc337a2d0c4374fa2fb0dbc944e6798016715057188329800c76e1c58e04856914ebeaefba6cc01ea72e2c4e803fa9aba56130d85ec163aa694512e03
+  key_id: governance-board-2026-r2
+  signature: 34c566f6386cb8af0fbc11235a46cfdf2dc3864f552c0ab662e01c27019cf870b5fb027e19d9513df81d6aafe8b62e3ae10e908c515d3977acf9dbe48c089c09
 rules:
 - id: vat.zero.non-oil-exports
   when:

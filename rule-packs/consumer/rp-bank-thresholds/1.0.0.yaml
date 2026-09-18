@@ -14,8 +14,8 @@ provenance:
   source_citation: MLPPA 2022 s.11 (currency transaction reporting above threshold); SCUML/CTR practice (N10,000,000)
 signed:
   algorithm: ed25519
-  key_id: meridian-ceremony-dev-002
-  signature: 5cc2961f054d4a08e88e41f6fb0a530d2a46f6f88bd00f44018099f84e5aa1c3c1f40274fd8fe64aa260f750c4b26f076511203dca010ba35aabbe81b1dca903
+  key_id: governance-board-2026-r2
+  signature: 07f55fe837b5b6f4c3cd4c9c6ec7ca1d0c1092bebb39a614a2aae13354c648419ddc6975903167372ab0c458c4e7fdf2dc689aa43cb33e4aa9638aa2fe4fbd06
 rules:
 - id: bank.ctr.single-transfer
   description: Single transfer at/above N10,000,000 (1e9 kobo) is CTR-reportable

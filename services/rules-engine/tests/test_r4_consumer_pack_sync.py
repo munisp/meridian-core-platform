@@ -5,7 +5,7 @@ via the rules-engine local-load path (PackLoader).
 
 Contract note: PackLoader verifies the ceremony contract
 (meridian-ceremony-canonical-yaml/v1 — canonical YAML bytes sans `signed`,
-ed25519 over those bytes, key_id governance-board-2026). This is the
+ed25519 over those bytes, key_id governance-board-2026-r2 after the R4-9a rotation). This is the
 verification entrypoint bridged by PR #66; these tests exercise exactly
 that entrypoint against the vendored consumer pack.
 
@@ -60,7 +60,7 @@ def test_canonical_pack_loads_under_full_enforcement(loader):
     # canonical content, incl. the NTA 2025 registration-threshold rules
     assert "vat.registration.threshold" in rule_ids
     assert "vat.registration.threshold-legacy" in rule_ids
-    assert pack["signed"]["key_id"] == "governance-board-2026"
+    assert pack["signed"]["key_id"] == "governance-board-2026-r2"
 
 
 def test_lockfile_pin_is_real_and_matches_canonical_digest():

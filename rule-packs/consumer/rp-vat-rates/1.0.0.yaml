@@ -3,8 +3,7 @@
 id: rp-vat-rates
 version: 1.0.0
 title: VAT rate table (standard 7.5%) with effective dates
-description: 'VAT rates: standard 7.5% (from 1 Feb 2020), zero-rated and exempt classes referenced to basket packs; rate history
-  retained for back-period computations.'
+description: 'VAT rates: standard 7.5% (from 1 Feb 2020), zero-rated and exempt classes referenced to basket packs; rate history retained for back-period computations.'
 effective_from: '2020-02-01'
 effective_to: null
 status: published
@@ -23,7 +22,7 @@ rules:
     rate_bps: 750
     narrate: VAT standard rate 7.5%.
   effective_from: '2020-02-01'
-  citation: "Finance Act 2019; VAT Act Cap V1 LFN 2004 (as amended); Nigeria Tax Act 2025"
+  citation: Finance Act 2019; VAT Act Cap V1 LFN 2004 (as amended); Nigeria Tax Act 2025
 - id: vat.rate.standard-legacy
   when:
     supply_class: standard
@@ -34,21 +33,21 @@ rules:
     narrate: Legacy 5% rate for back periods before 1 Feb 2020.
   effective_from: '1994-01-01'
   effective_to: '2020-01-31'
-  citation: "Finance Act 2019; VAT Act Cap V1 LFN 2004 (as amended); Nigeria Tax Act 2025"
+  citation: Finance Act 2019; VAT Act Cap V1 LFN 2004 (as amended); Nigeria Tax Act 2025
 - id: vat.rate.zero
   when:
     supply_class: zero_rated
   then:
     rate_bps: 0
     narrate: 'Zero-rated supplies: 0% with full input VAT recovery (basket in rp-vat-zerorated-basket).'
-  citation: "Finance Act 2019; VAT Act Cap V1 LFN 2004 (as amended); Nigeria Tax Act 2025"
+  citation: Finance Act 2019; VAT Act Cap V1 LFN 2004 (as amended); Nigeria Tax Act 2025
 - id: vat.rate.exempt
   when:
     supply_class: exempt
   then:
     decision: no_vat_no_input_recovery
     narrate: 'Exempt supplies: no output VAT, no input VAT recovery (basket in rp-vat-exempt-basket).'
-  citation: "Finance Act 2019; VAT Act Cap V1 LFN 2004 (as amended); Nigeria Tax Act 2025"
+  citation: Finance Act 2019; VAT Act Cap V1 LFN 2004 (as amended); Nigeria Tax Act 2025
 - id: vat.registration.threshold
   when:
     person: taxable
@@ -58,9 +57,7 @@ rules:
     threshold:
       annual_taxable_supplies_kobo:
         gt: 10000000000
-    narrate: NTA registration threshold N100m taxable supplies, applied gt — NTAA 2025 s.147 defines a small business as gross
-      turnover of "N100,000,000 or less", so turnover of EXACTLY N100m is still exempt and registration triggers only ABOVE
-      N100m. Consistent with rp-exemption-nta exempt.small-company (lte N100m exempt) and rp-turnover-bands band.exit.register.
+    narrate: NTA registration threshold N100m taxable supplies, applied gt — NTAA 2025 s.147 defines a small business as gross turnover of "N100,000,000 or less", so turnover of EXACTLY N100m is still exempt and registration triggers only ABOVE N100m. Consistent with rp-exemption-nta exempt.small-company (lte N100m exempt) and rp-turnover-bands band.exit.register.
   effective_from: '2026-01-01'
   citation: 'NTAA 2025, s.147 (Forvis Mazars: "annual turnover of N100 million or less")'
 - id: vat.registration.threshold-legacy
@@ -75,8 +72,8 @@ rules:
     narrate: Pre-2026 VAT Act registration threshold N25m taxable supplies (gte).
   effective_from: '2020-02-01'
   effective_to: '2025-12-31'
-  citation: "Finance Act 2019; VAT Act Cap V1 LFN 2004 (as amended); Nigeria Tax Act 2025"
+  citation: Finance Act 2019; VAT Act Cap V1 LFN 2004 (as amended); Nigeria Tax Act 2025
 signed:
   algorithm: ed25519
-  key_id: governance-board-2026
-  signature: 1b5b5532aecc81f9fedcd0d6b10e1ed1f832e6245062fe135eb7703bbcf1fa25afc0bc42a1857d29282430f8588045a699a3c1011289d95375ffc08280982d04
+  key_id: governance-board-2026-r2
+  signature: c46db479aae015e94b7f3fcd50deea7c08a69363720e733e17ac3af189be9f356dadef6250cbee4669de01f4c03a67dc5b2df6f924d194ad8de1f11207b9d30d

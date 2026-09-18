@@ -12,8 +12,8 @@ provenance:
   source_citation: VAT Act, First Schedule (exempt goods and services); Finance Act 2020/2021 amendments
 signed:
   algorithm: ed25519
-  key_id: meridian-ceremony-dev-002
-  signature: 560a7e890296c2dcb5200f316aa973f8e74ffec6844b6a811ee1eeb6d7e996ae5a2ea7df6cadf30e7b4cb4d07b83e706d19b99e561d5ed8f040f4b7b3d116b0b
+  key_id: governance-board-2026-r2
+  signature: 0f78ca2c341df219b46f04d9eebf20ba8c66f5d65794eb64f2cca3140913ab616cae312093039fde95f4093cc006857c8db37865a71488d08c52036173ec260a
 rules:
 - id: vat.exempt.medical-services
   when:
