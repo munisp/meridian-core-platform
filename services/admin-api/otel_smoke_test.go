@@ -4,6 +4,10 @@ package main
 // tenant.id through the httpx chain, and the instrumented downstream client
 // emits a CLIENT span while injecting traceparent/baggage into outbound
 // inter-service calls.
+//
+// R4 (otelx tenant-attribution hardening): tenant.id is stamped ONLY from a
+// token verified by the platform verifier (otelx.TenantVerifier) — caller-
+// controlled tenant headers are stripped at the server edge and never trusted.
 
 import (
 	"context"
@@ -57,12 +61,23 @@ func TestOTelSpanSmoke(t *testing.T) {
 	}
 
 	// SERVER span via the standard chain, with tenant.id mirrored to baggage.
+	// R4: tenant.id comes only from a VERIFIED token (stub verifier); the
+	// spoofed tenant header below is stripped at the server edge.
+	prev := otelx.TenantVerifier
+	otelx.TenantVerifier = func(auth string) string {
+		if auth == "Bearer stub-verified" {
+			return "tenant-admin-smoke"
+		}
+		return ""
+	}
+	defer func() { otelx.TenantVerifier = prev }()
 	exp.Reset()
 	mux := http.NewServeMux()
 	httpx.RegisterStandard(mux, "admin-api", version, nil)
 	handler := httpx.NewServer(":", mux).Handler
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	req.Header.Set("X-Meridian-Tenant", "tenant-admin-smoke")
+	req.Header.Set("X-Meridian-Tenant", "attacker-spoofed")
+	req.Header.Set("Authorization", "Bearer stub-verified")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
