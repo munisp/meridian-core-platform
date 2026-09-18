@@ -58,10 +58,15 @@ var defaultRoutes = []RouteSpec{
 	{ID: "core-search", Plane: "core", Name: "search-indexer", PathPrefix: "/v1/search", Methods: []string{"GET"}, Upstream: "search-indexer:8008", Service: "search-indexer", Auth: true},
 	{ID: "core-edge", Plane: "core", Name: "edge-policy", PathPrefix: "/v1/routes", Methods: []string{"GET"}, Upstream: "edge-policy:8009", Service: "edge-policy", Auth: true},
 	// market + sovereign plane anchor routes (plane services register their own)
-	{ID: "market-einvoicing", Plane: "market", Name: "einvoicing", PathPrefix: "/v1/invoices", Methods: []string{"GET", "POST"}, Upstream: "einvoicing:8101", Service: "einvoicing", Auth: true},
-	{ID: "market-wht", Plane: "market", Name: "wht", PathPrefix: "/v1/wht", Methods: []string{"GET", "POST"}, Upstream: "wht:8103", Service: "wht", Auth: true},
+	// R4 (S2 finding #4): upstream ports match the services' real binds —
+	// einvoicing 8110 (compliance services/einvoicing/main.go), wht 8130
+	// (compliance docker-compose wht service), enclave-gateway 8400
+	// (gov-enclave services/enclave-gateway/config.go). 8101/8103 are
+	// inclusion-suite ports; routing there was cross-plane misrouting.
+	{ID: "market-einvoicing", Plane: "market", Name: "einvoicing", PathPrefix: "/v1/invoices", Methods: []string{"GET", "POST"}, Upstream: "einvoicing:8110", Service: "einvoicing", Auth: true},
+	{ID: "market-wht", Plane: "market", Name: "wht", PathPrefix: "/v1/wht", Methods: []string{"GET", "POST"}, Upstream: "wht:8130", Service: "wht", Auth: true},
 	{ID: "market-pos-vat", Plane: "market", Name: "pos-vat", PathPrefix: "/v1/pos", Methods: []string{"GET", "POST"}, Upstream: "pos-vat:8106", Service: "pos-vat", Auth: true},
-	{ID: "sovereign-enclave-gateway", Plane: "sovereign", Name: "enclave-gateway", PathPrefix: "/v1/enclave", Methods: []string{"GET", "POST"}, Upstream: "enclave-gateway:8204", Service: "enclave-gateway", Auth: true},
+	{ID: "sovereign-enclave-gateway", Plane: "sovereign", Name: "enclave-gateway", PathPrefix: "/v1/enclave", Methods: []string{"GET", "POST"}, Upstream: "enclave-gateway:8400", Service: "enclave-gateway", Auth: true},
 }
 
 type server struct {

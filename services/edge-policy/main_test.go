@@ -168,9 +168,9 @@ func TestRenderAPISIXFreshBootEnforces(t *testing.T) {
 // just URI/args, and fail closed on uninspectable bodies.
 func TestWAFLuaInspectsRequestBody(t *testing.T) {
 	for _, want := range []string{
-		"ngx.req.read_body",   // body read at rewrite phase
-		"get_body_data",       // body content inspected
-		"content_length",      // size gate
+		"ngx.req.read_body",              // body read at rewrite phase
+		"get_body_data",                  // body content inspected
+		"content_length",                 // size gate
 		"target .. \" \" .. lower(body)", // body folded into match target
 	} {
 		if !strings.Contains(wafServerlessLua, want) {
@@ -200,5 +200,53 @@ func TestLimitPolicyFor(t *testing.T) {
 	p := limitPolicyFor(RouteSpec{PathPrefix: "/v1/auth/otp", Methods: []string{"POST"}})
 	if p.Count != 100 || p.TimeWindow != 86400 {
 		t.Fatalf("OTP policy: %+v", p)
+	}
+}
+
+// R4 (S2 finding #4): the gateway route table must point at the REAL
+// plane service ports. Regression: einvoicing/wht/enclave-gateway were
+// wired to 8101/8103/8204 — 8101/8103 are inclusion-suite ports
+// (cross-plane misrouting) and 8204 matches nothing.
+//
+// Source-of-truth binds (verified against the plane repos):
+//
+//	compliance-suite  services/einvoicing/main.go:197  PORT default 8110
+//	compliance-suite  docker-compose.yml wht service   --port 8130
+//	compliance-suite  services/pos-vat/main.go:38      PORT default 8106
+//	gov-enclave       services/enclave-gateway/config.go:45 PORT default 8400
+func TestPlaneRoutePortsResolveToIntendedServices(t *testing.T) {
+	want := map[string]string{
+		"market-einvoicing":         "einvoicing:8110",
+		"market-wht":                "wht:8130",
+		"market-pos-vat":            "pos-vat:8106",
+		"sovereign-enclave-gateway": "enclave-gateway:8400",
+	}
+	seen := map[string]bool{}
+	for _, r := range defaultRoutes {
+		if w, ok := want[r.ID]; ok {
+			seen[r.ID] = true
+			if r.Upstream != w {
+				t.Errorf("route %s upstream = %s, want %s", r.ID, r.Upstream, w)
+			}
+		}
+	}
+	for id := range want {
+		if !seen[id] {
+			t.Errorf("route %s missing from defaultRoutes", id)
+		}
+	}
+}
+
+// Cross-plane guard: no route may point at an inclusion-suite port
+// (8101/8103 belong to inclusion onboarding/education) — that misroutes
+// market-plane traffic into a different trust plane.
+func TestNoRouteUsesInclusionSuitePorts(t *testing.T) {
+	inclusionPorts := []string{":8101", ":8103"}
+	for _, r := range defaultRoutes {
+		for _, p := range inclusionPorts {
+			if len(r.Upstream) >= len(p) && r.Upstream[len(r.Upstream)-len(p):] == p {
+				t.Errorf("route %s upstream %s uses an inclusion-suite port %s", r.ID, r.Upstream, p)
+			}
+		}
 	}
 }
