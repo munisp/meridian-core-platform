@@ -61,15 +61,23 @@ scrape_configs:
         labels: {instrumented: "false"}  # pending: metrics endpoint not yet enabled in compose
 
   # ---------------------------------------------------------- app services
+  # HONEST STATUS (R4, S2 finding #3): the docker-compose profiles carry
+  # middleware only — no application services join the compose network, so
+  # under docker compose these jobs report down (expected). Application
+  # pods run under the helm chart, which provisions METRICS_PORT=9460 and
+  # prometheus.io/scrape pod annotations; these same DNS names resolve in
+  # cluster-wide Prometheus setups. The instrumented="false" jobs remain
+  # pending-instrumentation either way.
   # Go services expose Prometheus /metrics on a DEDICATED listener
-  # (packages/events/httpx metrics.go; set METRICS_PORT=9090 in the service
-  # env — deliberately NOT on the public route table). Scrape the metrics
-  # port. rules-engine (Python), rp-registry, geo, notification,
+  # (packages/events/httpx metrics.go; METRICS_PORT=9460 is provisioned by the
+  # helm chart (platform.metricsPort) and must be set in any compose app
+  # environment — deliberately NOT on the public route table). Scrape the
+  # metrics port. rules-engine (Python), rp-registry, geo, notification,
   # search-indexer, migration and reg-watch remain PENDING INSTRUMENTATION
   # (instrumented="false", excluded from paging alerts).
   - job_name: admin-api            # services/admin-api/main.go PORT default 8095
     static_configs:
-      - targets: ["admin-api:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+      - targets: ["admin-api:9460"]  # METRICS_PORT=9460 (dedicated metrics listener)
         labels: {instrumented: "true"}
   - job_name: rules-engine         # services/rules-engine/app/main.py PORT default 8001
     static_configs:
@@ -81,11 +89,11 @@ scrape_configs:
         labels: {instrumented: "false"}
   - job_name: tin-graph            # services/tin-graph/main.go PORT default 8003
     static_configs:
-      - targets: ["tin-graph:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+      - targets: ["tin-graph:9460"]  # METRICS_PORT=9460 (dedicated metrics listener)
         labels: {instrumented: "true"}
   - job_name: audit-evidence       # services/audit-evidence/main.go PORT default 8004
     static_configs:
-      - targets: ["audit-evidence:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+      - targets: ["audit-evidence:9460"]  # METRICS_PORT=9460 (dedicated metrics listener)
         labels: {instrumented: "true"}
   - job_name: geo                  # services/geo/main.go PORT default 8005
     static_configs:
@@ -97,7 +105,7 @@ scrape_configs:
         labels: {instrumented: "false"}
   - job_name: consent              # services/consent/main.go PORT default 8007
     static_configs:
-      - targets: ["consent:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+      - targets: ["consent:9460"]  # METRICS_PORT=9460 (dedicated metrics listener)
         labels: {instrumented: "true"}
   - job_name: search-indexer       # services/search-indexer/main.go PORT default 8008
     static_configs:
@@ -105,11 +113,11 @@ scrape_configs:
         labels: {instrumented: "false"}
   - job_name: edge-policy          # services/edge-policy/main.go PORT default 8009
     static_configs:
-      - targets: ["edge-policy:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+      - targets: ["edge-policy:9460"]  # METRICS_PORT=9460 (dedicated metrics listener)
         labels: {instrumented: "true"}
   - job_name: ledger               # services/ledger/main.go PORT default 8010
     static_configs:
-      - targets: ["ledger:9090"]  # METRICS_PORT=9090 (dedicated metrics listener)
+      - targets: ["ledger:9460"]  # METRICS_PORT=9460 (dedicated metrics listener)
         labels: {instrumented: "true"}
   - job_name: migration            # services/migration/main.go PORT default 8011
     static_configs:
