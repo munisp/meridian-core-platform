@@ -44,14 +44,20 @@ func (sr *spanStatusRecorder) Flush() {
 // the handler runs (r.Pattern is only populated post-routing).
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// R4 (S3 #7): strip caller-controlled tenant assertions at the edge
+		// before any extraction/reflection; tenant.id is re-stamped below
+		// from the VERIFIED bearer token only.
+		StripTenantAssertions(r)
 		ctx := otel.GetTextMapPropagator().Extract(r.Context(),
 			propagationHeaderCarrier(r.Header))
 		tracer := otel.Tracer(tracerName)
-		ctx, span := tracer.Start(ctx, r.Method+" "+r.URL.Path,
+		// R4 (S3 #18): the span starts as just the method — the raw URL path
+		// (which carries IRNs/invoice ids) is never put on the span; the
+		// templated route replaces the name after routing.
+		ctx, span := tracer.Start(ctx, r.Method,
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
 				semconv.HTTPRequestMethodKey.String(r.Method),
-				semconv.URLPath(r.URL.Path),
 			))
 		defer span.End()
 
@@ -120,11 +126,18 @@ type clientTransport struct{ base http.RoundTripper }
 
 func (t *clientTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	tracer := otel.Tracer(tracerName)
+	// R4 (S3 #18): never capture the full URL — query strings leak TINs/PII
+	// (e.g. ?tin=...&from_period=... on filings exports) into trace backends.
+	// url.full is scheme://host + path only, query and fragment dropped.
+	redacted := *req.URL
+	redacted.RawQuery = ""
+	redacted.ForceQuery = false
+	redacted.Fragment = ""
 	ctx, span := tracer.Start(req.Context(), req.Method+" "+req.URL.Host+req.URL.Path,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			semconv.HTTPRequestMethodKey.String(req.Method),
-			semconv.URLFull(req.URL.String()),
+			semconv.URLFull(redacted.String()),
 			attribute.String("server.address", req.URL.Host),
 		))
 	defer span.End()
