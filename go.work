@@ -7,6 +7,7 @@ use (
 	./packages/permify-models
 	./packages/rulepack-schema
 	./packages/schemas/go
+	./packages/stepup
 	./packages/temporal-sdkx
 	./services/admin-api
 	./services/audit-evidence
