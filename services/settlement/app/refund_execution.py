@@ -243,10 +243,16 @@ class RefundExecutor:
     """Executes refund decisions as pending -> post ledger sagas with void
     compensation, idempotent per (tin_hash, period, tax_type)."""
 
-    def __init__(self, store: Any, ledger: LedgerPort, outbox: Any | None = None) -> None:
+    def __init__(self, store: Any, ledger: LedgerPort, outbox: Any | None = None,
+                 screener: Any | None = None) -> None:
         self.store = store
         self.ledger = ledger
         self.outbox = outbox
+        # R4 #9: counterparty screening port (fail-closed by default).
+        if screener is None:
+            from .screening import screener_from_env
+            screener = screener_from_env()
+        self.screener = screener
 
     def _accounts(self, tin_hash: str, destination: str) -> tuple[str, str]:
         tre = treasury_account()
@@ -310,6 +316,13 @@ class RefundExecutor:
                     f"{existing.get('amount_kobo')} kobo; refusing replay with "
                     f"{amount_kobo} kobo under the same (tin, period, tax_type) key")
             return {**existing, "idempotent_replay": True}
+        # R4 #9: sanctions/PEP screening of the payout counterparty BEFORE
+        # any ledger movement. Fail closed: a sanctions hit refuses the
+        # refund (CounterpartySanctioned); an unreachable screening endpoint
+        # refuses too (ScreeningUnavailable) unless the operator explicitly
+        # opted out in a dev profile (SCREENING_REQUIRED=0).
+        from .screening import enforce_counterparty_screening
+        screening = enforce_counterparty_screening(self.screener, tin_hash=tin_hash)
         # post_failed: the compensation voided the original pending, so a
         # retry must use a fresh deterministic attempt id (create_pending
         # dedups on the transfer id and a voided id cannot be re-posted).
@@ -336,6 +349,7 @@ class RefundExecutor:
             "destination_bound": True,
             "pending_transfer_id": pend_id, "post_transfer_id": post_id,
             "status": "pending", "approved_by": approved_by,
+            "counterparty_screening": screening,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         # NOTE: every store write below persists a COPY (dict(exe)) — the
