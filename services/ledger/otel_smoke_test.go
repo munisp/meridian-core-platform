@@ -4,6 +4,10 @@ package main
 // a SERVER span named "<METHOD> <route-template>" carrying tenant.id for a
 // ledger request, and the TigerBeetle client span must join the same trace
 // (request-parented). Telemetry never changes the business response.
+//
+// R4 (otelx tenant-attribution hardening): tenant.id is stamped ONLY from a
+// token verified by the platform verifier (otelx.TenantVerifier) — caller-
+// controlled tenant headers are stripped at the server edge and never trusted.
 
 import (
 	"context"
@@ -12,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"github.com/munisp/meridian-core-platform/services/ledger/internal/tb"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -24,12 +29,24 @@ func TestOTelSpanSmoke(t *testing.T) {
 	otel.SetTracerProvider(tp)
 	defer tp.Shutdown(context.Background())
 
+	// R4: tenant.id comes only from a VERIFIED token (stub verifier); the
+	// spoofed tenant header below is stripped at the server edge.
+	prev := otelx.TenantVerifier
+	otelx.TenantVerifier = func(auth string) string {
+		if auth == "Bearer stub-verified" {
+			return "tenant-smoke"
+		}
+		return ""
+	}
+	defer func() { otelx.TenantVerifier = prev }()
+
 	dev := tb.NewDevClient()
 	s := &server{client: tb.Traced(dev), dev: dev, dir: t.TempDir(), thresh: newThresholdTracker()}
 	handler := httpx.NewServer(":", s.routes()).Handler
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/transfers", nil)
-	req.Header.Set("X-Meridian-Tenant", "tenant-smoke")
+	req.Header.Set("X-Meridian-Tenant", "attacker-spoofed")
+	req.Header.Set("Authorization", "Bearer stub-verified")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
