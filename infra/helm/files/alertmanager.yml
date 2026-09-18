@@ -1,11 +1,17 @@
 # Meridian platform — Alertmanager config (otel-foundation wave).
 #
-# Routing tree by severity and tenant_id label. Receivers:
+# Routing tree by severity. Receivers:
 #   - email-critical / email-warning : SMTP injected from env at deploy time
 #   - webhook-generic                : on-call bridge (PagerDuty/Opsgenie/Teams)
 #   - slack-warnings                 : slack-compatible incoming webhook
 # All URLs/credentials are env-substituted placeholders (envsubst at deploy);
 # none claim to be production-ready until wired to the real bridges.
+#
+# R4 (S3 finding #9): the tenant_id group_by / webhook-tenant receiver /
+# tenant inhibit rule were REMOVED — no alert rule in alerts.yml emits a
+# tenant_id label, so that routing could never fire (dead config). Per-
+# tenant paging needs tenant-labelled rules first; add it back together
+# with rules that set tenant_id.
 #
 # Deploy: envsubst < alertmanager.yml > /etc/alertmanager/alertmanager.yml
 # with ALERTMANAGER_WEBHOOK_URL, SLACK_WEBHOOK_URL, SMTP_* set from the vault.
@@ -20,21 +26,15 @@ global:
 
 route:
   receiver: webhook-generic
-  group_by: ["alertname", "severity", "tenant_id", "team"]
+  group_by: ["alertname", "severity", "team"]
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    # Critical alerts page immediately, per tenant when labelled.
+    # Critical alerts page immediately.
     - matchers: ['severity = "critical"']
       receiver: email-critical
       repeat_interval: 1h
-      routes:
-        # Tenant-scoped criticals also go to the tenant ops webhook so
-        # per-tenant on-call can react before the global bridge escalates.
-        - matchers: ['tenant_id != ""']
-          receiver: webhook-tenant
-          continue: true
     # Warnings: email + slack-compatible webhook, no paging.
     - matchers: ['severity = "warning"']
       receiver: slack-warnings
@@ -48,11 +48,6 @@ receivers:
   - name: webhook-generic
     webhook_configs:
       - url: "${ALERTMANAGER_WEBHOOK_URL}"  # required at deploy time; no default
-        send_resolved: true
-
-  - name: webhook-tenant
-    webhook_configs:
-      - url: "${TENANT_ALERT_WEBHOOK_URL}"  # per-tenant on-call bridge
         send_resolved: true
 
   - name: email-critical
@@ -73,14 +68,14 @@ receivers:
         title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
         text: >-
           {{ range .Alerts }}*{{ .Labels.severity }}* {{ .Annotations.summary }}
-          tenant={{ .Labels.tenant_id }} team={{ .Labels.team }}
+          team={{ .Labels.team }}
           {{ end }}
 
 inhibit_rules:
   # A firing critical inhibits the matching warning for the same target.
   - source_matchers: ['severity = "critical"']
     target_matchers: ['severity = "warning"']
-    equal: ["alertname", "tenant_id"]
+    equal: ["alertname"]
   # Don't spam the warning DLQ alert when the critical one is already firing.
   - source_matchers: ['alertname = "KafkaDlqDepthCritical"']
     target_matchers: ['alertname = "KafkaDlqDepthWarning"']
