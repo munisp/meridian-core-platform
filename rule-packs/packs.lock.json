@@ -1,5 +1,5 @@
 {
-  "_comment": "Consumer lockfile: pinned rp-* versions for core-platform consumers. sha256 filled by the ceremony in meridian-rule-packs (tools/ceremony.py); values below are [seed] pins at 1.0.0. sha256 = hash of the canonical pack JSON (signed block removed); signature = ed25519 over the pin by key_id meridian-ceremony-dev-001 [seed dev key — replace via the real ceremony].",
+  "_comment": "Consumer lockfile: pinned rp-* versions for core-platform consumers. sha256 = hash of the ceremony canonical pack bytes (meridian-ceremony-canonical-yaml/v1: pack without the signed block, PyYAML safe_dump sort_keys=True allow_unicode=True default_flow_style=False width=inf, UTF-8) — the same bytes the governance ceremony signs. Filled by the ceremony in meridian-rule-packs; seed pins re-signed under the ceremony contract by meridian-ceremony-dev-002 (R4 contract bridge).",
   "pins": {
     "rp-ubl-bis": {
       "version": "1.0.0",
@@ -13,7 +13,7 @@
     },
     "rp-wht-2024": {
       "version": "1.0.0",
-      "sha256": "889e2cb3b54f255b9680c503fa90328ee5863b8c999ad48d428a6ee33029edf2",
+      "sha256": "ce6d4adcac7b484c909504ba84e489b6129a520bff95ab7dbd94a143727db46c",
       "subject_to_regazette": true
     },
     "rp-tp-2018": {
@@ -73,17 +73,17 @@
     },
     "rp-vat-rates": {
       "version": "1.0.0",
-      "sha256": "41aae5553ac9e785afb664994d12e9721897ee3188e9db4b5138b65c0e3e2921",
+      "sha256": "5d21ce7474c185fd8e21db6933bd242a481764e1d4d5f3ffb5b454a537d2b7f0",
       "subject_to_regazette": true
     },
     "rp-vat-exempt-basket": {
       "version": "1.0.0",
-      "sha256": "7e1b3dced17aa9387e9a5e1ba2c0374365f7e5f9e791429477892b8b2a931826",
+      "sha256": "7dfa8d44fe34d9d437ad9ea16676a13adec36c4c0a8779b4d53ae2a505b4c13c",
       "subject_to_regazette": true
     },
     "rp-vat-zerorated-basket": {
       "version": "1.0.0",
-      "sha256": "259c3ab6091389d0e82dd280189043d86698c0f29286c29f4a9c2e1cf1e0dd3f",
+      "sha256": "e3e83d7799125f4158a1411ae43e76fc7ea7d89db5f64d7b958ef27f48eb2e15",
       "subject_to_regazette": true
     },
     "rp-vat-attribution-mode": {
@@ -173,7 +173,7 @@
     },
     "rp-bank-thresholds": {
       "version": "1.0.0",
-      "sha256": "3feab9a7164f00bd331b39cbb242e63564027d0c4bcb6761851cf1e5a0e1d148",
+      "sha256": "d8b697543ab3d1fde91935eb80acff809ac51972657f16aa2ad3d535136e851e",
       "subject_to_regazette": true
     }
   }

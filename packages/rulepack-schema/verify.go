@@ -1,20 +1,29 @@
 package rulepackschema
 
-// Runtime ed25519 signature verification for rule packs (A1-09).
+// Runtime ed25519 signature verification for rule packs (A1-09, R4 bridge).
 //
-// Signing contract "meridian-canonical-json/v1": the signed message is the
-// pack mapping WITHOUT the `signed` block, serialised as UTF-8 JSON with
-// encoding/json (map keys sorted lexicographically, no insignificant
-// whitespace, HTML-sensitive characters escaped per encoding/json). This is
-// deterministic and reproducible in any language; ceremony tooling must
-// produce exactly these bytes (json.dumps(body, sort_keys=True,
-// separators=(",", ":")) matches for the string/number/bool/null data the
-// schema permits).
+// Signing contract "meridian-ceremony-canonical-yaml/v1": the signed message
+// is the pack mapping WITHOUT the `signed` block, serialised as canonical
+// YAML — byte-identical to meridian-rule-packs
+// tools/rpcommon.canonical_bytes (PyYAML safe_dump, sort_keys=True,
+// allow_unicode=True, default_flow_style=False, width=10**6, UTF-8). This
+// IS the ceremony contract: tools/ceremony.py signs exactly these bytes
+// (ed25519, key_id governance-board-2026), and packs cannot be re-signed,
+// so the ceremony contract alone governs verification.
 //
-// NOTE: this supersedes the CI-only PyYAML-canonical form
-// (meridian-rule-packs tools/rpcommon.canonical_bytes) for runtime
-// verification — PyYAML's emitter output is not byte-reproducible from Go.
-// Ceremony packs must carry a signature over the JSON-canonical bytes.
+// R4 contract bridge: this supersedes the retired "meridian-canonical-json/v1"
+// runtime contract, under which NO ceremony pack ever verified (the ceremony
+// never signed JSON-canonical bytes) and the Python packloader disagreed with
+// this Go verifier (sha256 digest vs raw message). There is now exactly ONE
+// contract across ceremony, Python packloader, and Go.
+//
+// Because the signed bytes are a PyYAML serialisation, verification runs
+// against the STORED canonical YAML artifact (the vendored pack file, or
+// the YAML held by the pack registry/WORM archive): the artifact is parsed
+// and re-emitted in the ceremony's canonical form (canon_yaml.go), never
+// re-signed from a Go-native serialisation. Byte-exactness of the Go
+// emitter is proven by verifying real ceremony signatures over its output
+// (see verify_test.go — ed25519 succeeds only on byte-identical messages).
 
 import (
 	"crypto/ed25519"
@@ -22,30 +31,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+
+	"gopkg.in/yaml.v3"
 )
 
-// CanonicalSigningBytes returns the exact bytes that are signed for a pack:
-// the pack mapping minus the `signed` block as canonical JSON (v1 contract
-// above). raw is typically Pack.Raw from ParsePackYAML.
-func CanonicalSigningBytes(raw map[string]any) ([]byte, error) {
-	if raw == nil {
-		return nil, errors.New("rulepack-schema: nil pack mapping")
-	}
-	body := make(map[string]any, len(raw))
-	for k, v := range raw {
-		if k == "signed" {
-			continue
-		}
-		body[k] = v
-	}
-	// encoding/json marshals maps with sorted keys — canonical by contract.
-	return json.Marshal(body)
-}
-
 // VerifyPackSignature cryptographically verifies pack.Signed against the
-// pinned public keys (key_id -> ed25519 public key). Fail-closed: unsigned
-// packs, unknown key ids, malformed or non-matching signatures are errors.
-func VerifyPackSignature(pack *Pack, keys map[string]ed25519.PublicKey) error {
+// pinned public keys (key_id -> ed25519 public key). canonical is the
+// ceremony canonical signing bytes derived from the stored YAML artifact
+// (CanonicalSigningBytesFromYAML). Fail-closed: unsigned packs, unknown key
+// ids, malformed or non-matching signatures, or an artifact that does not
+// match the pack being verified are errors.
+func VerifyPackSignature(pack *Pack, canonical []byte, keys map[string]ed25519.PublicKey) error {
 	if pack == nil {
 		return errors.New("rulepack-schema: nil pack")
 	}
@@ -66,12 +63,51 @@ func VerifyPackSignature(pack *Pack, keys map[string]ed25519.PublicKey) error {
 	if err != nil || len(sig) != ed25519.SignatureSize {
 		return fmt.Errorf("rulepack-schema: signed.signature is not a valid ed25519 signature (64-byte hex)")
 	}
-	msg, err := CanonicalSigningBytes(pack.Raw)
+	if len(canonical) == 0 {
+		return errors.New("rulepack-schema: no canonical artifact bytes supplied; refusing to verify against re-serialised content")
+	}
+	// Binding check: the supplied canonical bytes must decode to exactly the
+	// pack being verified (minus its signed block), so a signature over a
+	// DIFFERENT pack's artifact cannot be replayed against this pack.
+	if err := bindCanonicalToPack(pack, canonical); err != nil {
+		return err
+	}
+	if !ed25519.Verify(pub, canonical, sig) {
+		return fmt.Errorf("rulepack-schema: ed25519 signature does not verify against pinned key %q", pack.Signed.KeyID)
+	}
+	return nil
+}
+
+// VerifyPackYAMLArtifact is the common case: verify the signature on the
+// pack carried by the raw YAML artifact (vendored file / registry YAML),
+// deriving the ceremony canonical bytes from the artifact itself.
+func VerifyPackYAMLArtifact(pack *Pack, artifact []byte, keys map[string]ed25519.PublicKey) error {
+	canonical, err := CanonicalSigningBytesFromYAML(artifact)
 	if err != nil {
 		return err
 	}
-	if !ed25519.Verify(pub, msg, sig) {
-		return fmt.Errorf("rulepack-schema: ed25519 signature does not verify against pinned key %q", pack.Signed.KeyID)
+	return VerifyPackSignature(pack, canonical, keys)
+}
+
+// bindCanonicalToPack decodes the canonical bytes and requires deep
+// equality with pack.Raw minus the `signed` block.
+func bindCanonicalToPack(pack *Pack, canonical []byte) error {
+	if pack.Raw == nil {
+		return errors.New("rulepack-schema: pack has no decoded raw form to bind against the artifact")
+	}
+	var canonRaw map[string]any
+	if err := yaml.Unmarshal(canonical, &canonRaw); err != nil {
+		return fmt.Errorf("rulepack-schema: canonical artifact does not decode: %w", err)
+	}
+	body := make(map[string]any, len(pack.Raw))
+	for k, v := range pack.Raw {
+		if k == "signed" {
+			continue
+		}
+		body[k] = v
+	}
+	if !reflect.DeepEqual(body, canonRaw) {
+		return errors.New("rulepack-schema: canonical artifact does not match the pack being verified (binding check failed)")
 	}
 	return nil
 }

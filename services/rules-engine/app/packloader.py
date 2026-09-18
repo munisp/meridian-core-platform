@@ -29,10 +29,26 @@ class PackIntegrityError(ValueError):
 
 
 def canonical_pack_bytes(pack: dict) -> bytes:
-    """Canonical bytes for hashing/signing: the pack mapping without the
-    `signed` block, JSON-dumped with sorted keys."""
-    p = {k: v for k, v in pack.items() if k != "signed"}
-    return json.dumps(p, sort_keys=True, separators=(",", ":"), default=str).encode()
+    """Canonical bytes for hashing/signing — the ceremony contract
+    (meridian-ceremony-canonical-yaml/v1): the pack mapping WITHOUT the
+    `signed` block, serialised with PyYAML
+    ``yaml.safe_dump(sort_keys=True, allow_unicode=True,
+    default_flow_style=False, width=10**6)`` encoded UTF-8.
+
+    This is byte-identical to meridian-rule-packs
+    ``tools/rpcommon.canonical_bytes`` — the exact byte sequence the
+    governance ceremony signs (ed25519, key_id governance-board-2026).
+    The ceremony's round-trip check (tools/ceremony.py stage_publish)
+    re-loads the published file and re-dumps these bytes, so the
+    parse -> canonical-dump round trip is deterministic and is the same
+    code path the ceremony itself uses to verify. There is exactly ONE
+    signing contract; the former JSON/digest forms are retired (R4
+    contract bridge)."""
+    body = {k: v for k, v in pack.items() if k != "signed"}
+    return yaml.safe_dump(
+        body, sort_keys=True, allow_unicode=True,
+        default_flow_style=False, width=10**6,
+    ).encode("utf-8")
 
 
 def _load_lock(lock_path: Path) -> dict:
@@ -96,19 +112,22 @@ class PackLoader:
         self._mtime: dict[str, float] = {}
         lock_env = os.environ.get("PACKS_LOCK_PATH", "")
         keys_env = os.environ.get("PACK_SIGNING_KEYS", "")
-        candidates = [lock_env] if lock_env else [
-            str(self.packs_dir / "packs.lock.json"),
-            str(self.packs_dir.parent / "packs.lock.json"),
-        ]
+        # Explicit constructor args win, then env, then pack-dir conventions.
+        candidates = ([lock_path] if lock_path else []) + (
+            [lock_env] if lock_env else [
+                str(self.packs_dir / "packs.lock.json"),
+                str(self.packs_dir.parent / "packs.lock.json"),
+            ])
         self._pins: dict[str, dict] = {}
         for c in candidates:
             if c and Path(c).exists():
                 self._pins = _load_lock(Path(c))
                 break
-        key_candidates = [keys_env] if keys_env else [
-            str(self.packs_dir / "signing_keys.json"),
-            str(self.packs_dir.parent / "signing_keys.json"),
-        ]
+        key_candidates = ([signing_keys_path] if signing_keys_path else []) + (
+            [keys_env] if keys_env else [
+                str(self.packs_dir / "signing_keys.json"),
+                str(self.packs_dir.parent / "signing_keys.json"),
+            ])
         self._signing_keys: dict[str, dict] = {}
         for c in key_candidates:
             if c and Path(c).exists():
@@ -154,7 +173,8 @@ class PackLoader:
         if not self.enforce:
             return
         pin = (self._pins.get(pack_id) or {}).get("sha256")
-        digest = hashlib.sha256(canonical_pack_bytes(pack)).hexdigest()
+        canonical = canonical_pack_bytes(pack)
+        digest = hashlib.sha256(canonical).hexdigest()
         if pin and pin != digest:
             raise PackIntegrityError(
                 f"{pack_id}@{version}: sha256 pin mismatch "
@@ -171,7 +191,9 @@ class PackLoader:
         if not key:
             raise PackIntegrityError(
                 f"{pack_id}@{version}: unknown signing key_id {signed.get('key_id')!r}")
-        if not _verify_ed25519(str(signed.get("signature", "")), bytes.fromhex(digest),
+        # Ceremony contract: ed25519 over the canonical YAML bytes themselves
+        # (NOT a sha256 digest, NOT a JSON serialisation).
+        if not _verify_ed25519(str(signed.get("signature", "")), canonical,
                                str(key.get("public_key_hex", ""))):
             raise PackIntegrityError(f"{pack_id}@{version}: signature verification failed")
 

@@ -74,7 +74,10 @@ type server struct {
 // any pack carrying a signed block is cryptographically verified when keys
 // are pinned (fail-closed on mismatch); in prod, packs registered or
 // published as status=published MUST carry a valid pinned-key signature.
-func (s *server) verifyPackOnWrite(pack *rpschema.Pack) error {
+// The signature is verified against the ceremony canonical YAML bytes
+// derived from the submitted artifact (meridian-ceremony-canonical-yaml/v1),
+// never against a Go-native re-serialisation (R4 contract bridge).
+func (s *server) verifyPackOnWrite(pack *rpschema.Pack, artifact []byte) error {
 	if pack.Signed == nil {
 		if s.prod && pack.Status == "published" {
 			return fmt.Errorf("PROFILE=prod refuses unsigned status=published pack (rule-injection guard, A1-09)")
@@ -84,7 +87,7 @@ func (s *server) verifyPackOnWrite(pack *rpschema.Pack) error {
 		}
 		return fmt.Errorf("unsigned pack cannot be registered while signing keys are pinned (A1-09)")
 	}
-	return rpschema.VerifyPackSignature(pack, s.signKeys)
+	return rpschema.VerifyPackYAMLArtifact(pack, artifact, s.signKeys)
 }
 
 func key(id, ver string) string { return id + "@" + ver }
@@ -201,7 +204,7 @@ func (s *server) registerPack(w http.ResponseWriter, r *http.Request) {
 	// A1-09: real ed25519 verification on publish (previously the signature
 	// was only format-checked — registry store write access meant arbitrary
 	// rule injection).
-	if err := s.verifyPackOnWrite(pack); err != nil {
+	if err := s.verifyPackOnWrite(pack, raw); err != nil {
 		httpx.JSON(w, http.StatusUnprocessableEntity, map[string]any{
 			"type": "about:blank", "title": "pack_signature_invalid", "status": 422,
 			"errors": []string{err.Error()},
@@ -333,7 +336,7 @@ func (s *server) publishPack(w http.ResponseWriter, r *http.Request) {
 	// body; ceremony signs the final published form).
 	if rec.Signed != nil || s.prod {
 		pack := &rpschema.Pack{ID: rec.ID, Version: rec.Version, Status: rec.Status, Signed: rec.Signed, Raw: rec.Pack}
-		if err := s.verifyPackOnWrite(pack); err != nil {
+		if err := s.verifyPackOnWrite(pack, []byte(rec.YAML)); err != nil {
 			httpx.JSON(w, http.StatusUnprocessableEntity, map[string]any{
 				"type": "about:blank", "title": "pack_signature_invalid", "status": 422,
 				"errors": []string{err.Error()},
