@@ -53,6 +53,12 @@ def test_endpoint_and_manual_review_event():
             "tin_hash": "tin-x", "amount_kobo": 1_200_000_000, "tax_type": "vat"})
         assert r.status_code == 200, r.text
         assert r.json()["lane"] == "manual_review"
+        # R4 S1a#3: auto_approve additionally requires a bound original
+        # payment source; seed it for tin-y.
+        from app.refund_execution import payment_source_key, taxpayer_account
+        _store.put("payment_sources", payment_source_key("tin-y", "*", "vat"), {
+            "tin_hash": "tin-y", "period": "*", "tax_type": "vat",
+            "account_id": taxpayer_account("tin-y"), "source": "test"})
         r = c.post("/v1/refunds/fasttrack", headers=H, json={
-            "tin_hash": "tin-y", "amount_kobo": 100_000_000})
+            "tin_hash": "tin-y", "amount_kobo": 100_000_000, "tax_type": "vat"})
         assert r.json()["lane"] == "auto_approve"

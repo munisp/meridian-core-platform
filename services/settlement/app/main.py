@@ -46,8 +46,9 @@ def _start_relay() -> None:  # pragma: no cover
     _relay.start()
 
 
-from .refund_execution import (RefundExecutor, RefundPayloadConflict,  # noqa: E402
-                               ledger_from_env, refund_id)
+from .refund_execution import (RefundDestinationUnbound, RefundExecutor,  # noqa: E402
+                               RefundPayloadConflict, bound_destination,
+                               ledger_from_env, payment_source_key, refund_id)
 
 _executor = RefundExecutor(_store, ledger_from_env(), _outbox)
 
@@ -84,12 +85,13 @@ def refund_decision_expired(doc: dict, now: float | None = None) -> bool:
 
 def _refund_decision_terminal(doc: dict) -> bool:
     """Terminal = the refund's funds flow can no longer move money: the
-    execution posted, or the lane never executes (standard). A
-    manual_review decision awaiting approval is NOT terminal."""
+    execution posted, or the decision was rejected. A pending manual_review
+    or standard decision awaiting approval is NOT terminal (R4 S1a#4: the
+    standard lane is now executable via the approval queue)."""
     exe = _store.get("refund_executions", doc.get("refund_id", "")) or doc.get("execution")
     if exe and exe.get("status") == "posted":
         return True
-    return doc.get("lane") == "standard"
+    return doc.get("status") == "rejected"
 
 
 def purge_expired_refund_decisions(now: float | None = None) -> int:
@@ -349,9 +351,24 @@ class FastTrackRequest(BaseModel):
     period: str | None = None  # e.g. "2026-07"; defaults to the current month
 
 
+def _check_tenant_tin_binding(claims: Claims, tin_hash: str) -> None:
+    """R4 S1a#1: the caller-supplied tin_hash must resolve to the caller's
+    tenant context. Ownership bindings live in the server-side tenant_tins
+    registry (populated by onboarding/registration pipelines, or via
+    POST /v1/tenants/bind-tin by an admin). If a binding exists and does
+    not match the caller's tenant, the refund is refused (403). Absent a
+    binding there is no ownership claim to violate, and the downstream
+    credit-profile check still fails closed when no profile exists."""
+    binding = _store.get("tenant_tins", tin_hash)
+    if binding is None:
+        return
+    if not claims.tenant_id or claims.tenant_id != binding.get("tenant_id"):
+        raise HTTPException(403, "tin_hash is not registered to the caller's tenant")
+
+
 @app.post("/v1/refunds/fasttrack")
 def refund_fasttrack(req: FastTrackRequest,
-                     claims: Claims = Depends(fastapi_dependency())) -> dict:
+                     claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
     """I3 + F2: decide the refund lane AND execute approved refunds.
     auto_approve (<= ₦5m) posts via the refund workflow; manual_review is
     queued for the manual-approve endpoint. Idempotent per
@@ -361,6 +378,7 @@ def refund_fasttrack(req: FastTrackRequest,
     no longer self-certify a clean recon history (audit Flow 2c)."""
     from .refund import decide_refund_lane
 
+    _check_tenant_tin_binding(claims, req.tin_hash)
     period = req.period or time.strftime("%Y-%m", time.gmtime())
     rid = refund_id(req.tin_hash, period, req.tax_type)
     prior = _store.get("refund_decisions", rid)
@@ -416,6 +434,15 @@ def refund_fasttrack(req: FastTrackRequest,
     doc["tin_hash"] = req.tin_hash
     doc["tax_type"] = req.tax_type
     doc["expires_at"] = _iso(time.time() + REFUND_IDEMPOTENCY_TTL_SECONDS)
+    doc["initiated_by"] = claims.sub  # maker identity for maker!=checker
+    doc["status"] = "pending"
+    if doc["lane"] == "auto_approve" and bound_destination(
+            _store, req.tin_hash, period, req.tax_type) is None:
+        # R4 S1a#3: never auto-pay an unverifiable destination — demote to
+        # manual review where an operator can establish the source binding.
+        doc["lane"] = "manual_review"
+        doc["reasons"].append("no original payment source on file for this "
+                              "(tin, period, tax_type); demoted to manual review")
     _store.put("refund_decisions", rid, doc)
     if doc["lane"] == "auto_approve":
         try:
@@ -424,12 +451,15 @@ def refund_fasttrack(req: FastTrackRequest,
                                     decision=doc, approved_by="fasttrack:auto")
         except RefundPayloadConflict as exc:
             raise HTTPException(409, str(exc)) from exc
+        except RefundDestinationUnbound as exc:
+            raise HTTPException(409, str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(502, f"refund execution failed: {exc}") from exc
         doc["execution"] = exe
-    elif doc["lane"] == "manual_review":
+        doc["status"] = "executed"
+    elif doc["lane"] in ("manual_review", "standard"):
         event = {"type": "nrs.refund.manual_review.v1", "dedup_key": f"manual_review:{rid}",
-                 "decision": doc, "queued_at": doc["decided_at"]}
+                 "decision": doc, "queued_at": doc["decided_at"], "lane": doc["lane"]}
         _store.put("refund_manual_review", rid, event)
         from meridian_events.envelope import new_envelope
         _outbox.append("nrs.refund.manual_review.v1",
@@ -437,27 +467,115 @@ def refund_fasttrack(req: FastTrackRequest,
     return doc
 
 
+# ---------------------------------------------------------------------------
+# R4 S1a#4: standard-lane approval queue (was: no endpoint; approve 409'd
+# any lane != manual_review, so standard refunds could never execute).
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/refunds/queue")
+def refund_queue(lane: str | None = None,
+                 limit: PageLimit = 50,
+                 offset: PageOffset = 0,
+                 claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
+    """List refund decisions awaiting a human decision (manual_review and
+    standard lanes; rejected/executed decisions drop out of the queue)."""
+    docs = [d for d in _store.list("refund_decisions")
+            if d.get("lane") in ("manual_review", "standard")
+            and d.get("status", "pending") == "pending"
+            and not (d.get("execution") or {}).get("status") == "posted"]
+    if lane:
+        docs = [d for d in docs if d.get("lane") == lane]
+    page, total = _page(docs, limit, offset)
+    return {"refunds": page, "count": len(page), "total": total,
+            "limit": limit, "offset": offset}
+
+
+def _enforce_maker_checker(doc: dict, claims: Claims) -> None:
+    """Maker != checker: the principal who initiated the refund decision
+    cannot also approve it. The ledger saga separately splits maker/settle
+    service tokens (MERIDIAN_LEDGER_MAKER_TOKEN / *_SETTLE_TOKEN)."""
+    maker = doc.get("initiated_by")
+    if maker and maker == claims.sub:
+        raise HTTPException(403, "maker!=checker: the initiating principal cannot approve this refund")
+
+
 @app.post("/v1/refunds/{rid}/approve")
 def refund_manual_approve(rid: str,
                           claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
-    """Manual-approve endpoint for refunds above the ₦5m auto cap: executes
-    the SAME refund workflow after human approval (idempotent per refund)."""
+    """Approve endpoint for manual_review AND standard lanes: executes the
+    SAME refund workflow after human approval (idempotent per refund)."""
     doc = _store.get("refund_decisions", rid)
     if doc is None:
         raise HTTPException(404, f"refund decision {rid}")
-    if doc.get("lane") != "manual_review":
-        raise HTTPException(409, f"refund {rid} is in lane {doc.get('lane')}; manual approve not applicable")
+    if doc.get("status") == "rejected":
+        raise HTTPException(409, f"refund {rid} was rejected and cannot be approved")
+    if doc.get("lane") not in ("manual_review", "standard"):
+        raise HTTPException(409, f"refund {rid} is in lane {doc.get('lane')}; approve not applicable")
+    _check_tenant_tin_binding(claims, doc["tin_hash"])
+    _enforce_maker_checker(doc, claims)
     try:
-        exe = _executor.execute(tin_hash=doc["tin_hash"] if "tin_hash" in doc else doc.get("tin_hash", ""),
-                                period=doc["period"], tax_type=doc.get("tax_type"),
+        exe = _executor.execute(tin_hash=doc["tin_hash"], period=doc["period"],
+                                tax_type=doc.get("tax_type"),
                                 amount_kobo=doc["amount_kobo"], decision=doc,
                                 approved_by=claims.sub)
+    except RefundDestinationUnbound as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except RefundPayloadConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"refund execution failed: {exc}") from exc
     doc["execution"] = exe
     doc["approved_by"] = claims.sub
+    doc["status"] = "executed"
     _store.put("refund_decisions", rid, doc)
     return {"decision": doc, "execution": exe}
+
+
+class RefundRejectRequest(BaseModel):
+    reason: str | None = None
+
+
+@app.post("/v1/refunds/{rid}/reject")
+def refund_reject(rid: str, req: RefundRejectRequest,
+                  claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
+    """Reject a queued refund decision (manual_review or standard lane).
+    Rejected decisions never execute and become purge-terminal."""
+    doc = _store.get("refund_decisions", rid)
+    if doc is None:
+        raise HTTPException(404, f"refund decision {rid}")
+    if (doc.get("execution") or {}).get("status") == "posted":
+        raise HTTPException(409, f"refund {rid} already executed; cannot reject")
+    _check_tenant_tin_binding(claims, doc["tin_hash"])
+    _enforce_maker_checker(doc, claims)
+    doc["status"] = "rejected"
+    doc["rejected_by"] = claims.sub
+    doc["reject_reason"] = req.reason
+    doc["rejected_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    _store.put("refund_decisions", rid, doc)
+    return {"decision": doc}
+
+
+class TenantTinBindingRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    tin_hash: str
+    tenant_id: str
+
+
+@app.post("/v1/tenants/bind-tin")
+def bind_tenant_tin(req: TenantTinBindingRequest,
+                    claims: Claims = Depends(fastapi_dependency({"admin"}))) -> dict:
+    """Register the server-side tenant<->TIN ownership binding used to
+    authorise refund initiation. Admin-only; rebinding is allowed only by
+    an admin of the currently-bound tenant."""
+    existing = _store.get("tenant_tins", req.tin_hash)
+    if existing is not None and existing.get("tenant_id") != req.tenant_id:
+        if not claims.tenant_id or claims.tenant_id != existing.get("tenant_id"):
+            raise HTTPException(403, "tin_hash is bound to another tenant")
+    doc = {"tin_hash": req.tin_hash, "tenant_id": req.tenant_id,
+           "bound_by": claims.sub,
+           "bound_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    _store.put("tenant_tins", req.tin_hash, doc)
+    return {"binding": doc}
 
 
 @app.post("/v1/refunds/sweep")
@@ -643,6 +761,18 @@ def ingest_records(req: IngestRequest, claims: Claims = Depends(fastapi_dependen
         raise HTTPException(422, f"side must be one of {sorted(colls)}")
     for r in req.records:
         _store.put(coll, r.reference, r.model_dump())
+        # R4 S1a#3: captured payment records carry the ORIGINAL source
+        # account in meta (tin_hash + source_account); record the
+        # server-side binding that refund execution pays back to.
+        meta = r.meta or {}
+        tin_hash, src = meta.get("tin_hash"), meta.get("source_account")
+        if tin_hash and src:
+            key = payment_source_key(tin_hash, meta.get("period", "*"),
+                                     meta.get("tax_type"))
+            _store.put("payment_sources", key, {
+                "tin_hash": tin_hash, "period": meta.get("period", "*"),
+                "tax_type": meta.get("tax_type"), "account_id": src,
+                "source": f"recon-ingest:{req.side}", "reference": r.reference})
     return {"side": req.side, "ingested": len(req.records)}
 
 

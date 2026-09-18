@@ -47,6 +47,34 @@ def refund_id(tin_hash: str, period: str, tax_type: str | None) -> str:
     return "ref-" + deterministic_id(f"refund:{tin_hash}:{period}:{tax_type or 'any'}")[:24]
 
 
+class RefundDestinationUnbound(Exception):
+    """R4 S1a#3: a core refund must pay the ORIGINAL payment source account
+    (the same source-binding rule as the NIP lane, nip_recon.go:434-443).
+    Raised when no server-side payment-source binding exists for the
+    (tin_hash, period, tax_type) key, or when a caller/operator tries to
+    execute against a destination that is not the bound source."""
+
+
+def payment_source_key(tin_hash: str, period: str, tax_type: str | None) -> str:
+    return f"{tin_hash}:{period}:{tax_type or 'any'}"
+
+
+def bound_destination(store: Any, tin_hash: str, period: str,
+                      tax_type: str | None) -> str | None:
+    """Resolve the refund destination from the server-side payment-source
+    registry (populated by settlement ingest pipelines from captured
+    payment records — never from caller input). Falls back to the latest
+    recorded source for the TIN under the wildcard period key."""
+    rec = store.get("payment_sources", payment_source_key(tin_hash, period, tax_type))
+    if rec is None:
+        rec = store.get("payment_sources", payment_source_key(tin_hash, "*", tax_type))
+    if rec is None and tax_type is not None:
+        rec = store.get("payment_sources", payment_source_key(tin_hash, period, None))
+    if rec is None:
+        return None
+    return rec.get("account_id")
+
+
 def _account_id(namespace: int, serial: int) -> str:
     return f"{namespace:016x}{serial:016x}"
 
@@ -220,13 +248,15 @@ class RefundExecutor:
         self.ledger = ledger
         self.outbox = outbox
 
-    def _accounts(self, tin_hash: str) -> tuple[str, str]:
-        tre, tax = treasury_account(), taxpayer_account(tin_hash)
+    def _accounts(self, tin_hash: str, destination: str) -> tuple[str, str]:
+        tre = treasury_account()
         self.ledger.ensure_account(tre, 1, InprocLedger.FLAG_DEBITS_NOT_EXCEED_CREDITS
                                    if isinstance(self.ledger, InprocLedger) else 1,
                                    "nrs-refund-treasury")
-        self.ledger.ensure_account(tax, 1, 0, "refund-taxpayer")
-        return tre, tax
+        # R4 S1a#3: the credit side is the bound ORIGINAL payment source
+        # account, not a tin-derived internal account.
+        self.ledger.ensure_account(destination, 1, 0, "refund-destination:original-source")
+        return tre, destination
 
     def ledger_transfer(self, debit: str, credit: str, amount_kobo: int, seed: str) -> str:
         """Immediate transfer with a deterministic id (InprocLedger dev
@@ -254,7 +284,23 @@ class RefundExecutor:
         self.outbox.append(topic, new_envelope(topic, "settlement", payload))
 
     def execute(self, *, tin_hash: str, period: str, tax_type: str | None,
-                amount_kobo: int, decision: dict, approved_by: str) -> dict:
+                amount_kobo: int, decision: dict, approved_by: str,
+                destination_account: str | None = None) -> dict:
+        # R4 S1a#3: bind the refund destination to the ORIGINAL payment
+        # source account recorded server-side. No binding -> fail closed
+        # (the endpoint demotes auto lanes to manual review instead of
+        # paying an unverifiable destination). A requested destination that
+        # is not the bound source is rejected outright.
+        bound = bound_destination(self.store, tin_hash, period, tax_type)
+        if bound is None:
+            raise RefundDestinationUnbound(
+                f"no original payment source on file for "
+                f"{payment_source_key(tin_hash, period, tax_type)}; refund "
+                f"destination cannot be verified")
+        if destination_account is not None and destination_account != bound:
+            raise RefundDestinationUnbound(
+                f"requested destination {destination_account} is not the "
+                f"bound original payment source {bound}")
         rid = refund_id(tin_hash, period, tax_type)
         existing = self.store.get("refund_executions", rid)
         if existing is not None and existing.get("status") in ("posted", "pending"):
@@ -271,7 +317,7 @@ class RefundExecutor:
         attempt = 0
         if existing is not None and existing.get("status") == "post_failed":
             attempt = int(existing.get("attempt", 0)) + 1
-        tre, tax = self._accounts(tin_hash)
+        tre, tax = self._accounts(tin_hash, bound)
         # fund the refund treasury from the budget-offset account for this
         # refund (idempotent per refund id; the treasury enforces
         # debits<=credits so unfunded refunds cannot execute)
@@ -287,6 +333,7 @@ class RefundExecutor:
             "refund_id": rid, "tin_hash": tin_hash, "period": period, "tax_type": tax_type,
             "amount_kobo": amount_kobo, "lane": decision.get("lane"), "attempt": attempt,
             "treasury_account": tre, "taxpayer_account": tax,
+            "destination_bound": True,
             "pending_transfer_id": pend_id, "post_transfer_id": post_id,
             "status": "pending", "approved_by": approved_by,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

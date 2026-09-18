@@ -36,6 +36,13 @@ def _req(tin, amount=300_000_000, period="2026-08"):
     _store.put("taxpayer_credit_profiles", tin, {
         "tin_hash": tin, "credit_score": 800,
         "filings_on_time": 12, "filings_total": 12})
+    # R4 S1a#3: refund destinations are bound to the original payment
+    # source recorded server-side; seed the binding (using the legacy
+    # derived account id keeps _posted_to assertions intact).
+    from app.refund_execution import payment_source_key
+    _store.put("payment_sources", payment_source_key(tin, period, "vat"), {
+        "tin_hash": tin, "period": period, "tax_type": "vat",
+        "account_id": taxpayer_account(tin), "source": "test"})
     return {"tin_hash": tin, "amount_kobo": amount, "tax_type": "vat",
             "period": period}
 
@@ -154,6 +161,7 @@ def test_deadlock_during_post_compensates_void():
         raise SimulatedDeadlock("deadlock detected")
 
     led.post_pending_as = boom
+    _req("tin-dlp", amount=10_000_000)
     try:
         try:
             _executor.execute(tin_hash="tin-dlp", period="2026-08", tax_type="vat",
@@ -185,6 +193,7 @@ def test_same_key_different_amount_conflicts_409():
 
 
 def test_executor_payload_conflict_direct():
+    _req("tin-amtd", amount=10_000_000)
     _executor.execute(tin_hash="tin-amtd", period="2026-08", tax_type="vat",
                       amount_kobo=10_000_000, decision={"lane": "auto_approve"},
                       approved_by="test")

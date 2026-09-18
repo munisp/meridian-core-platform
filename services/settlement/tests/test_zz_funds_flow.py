@@ -27,6 +27,11 @@ def _auto_approvable(tin="tin-r1", amount=300_000_000, period="2026-07"):
     _store.put("taxpayer_credit_profiles", tin, {
         "tin_hash": tin, "credit_score": 800,
         "filings_on_time": 12, "filings_total": 12})
+    # R4 S1a#3: destination bound to the original payment source.
+    from app.refund_execution import payment_source_key, taxpayer_account
+    _store.put("payment_sources", payment_source_key(tin, period, "vat"), {
+        "tin_hash": tin, "period": period, "tax_type": "vat",
+        "account_id": taxpayer_account(tin), "source": "test"})
     return {"tin_hash": tin, "amount_kobo": amount, "tax_type": "vat",
             "period": period}
 
@@ -70,6 +75,7 @@ def test_double_submit_one_transfer():
 def test_crash_after_pending_sweep_resumes():
     # simulate the crash: pending created + record persisted, no post
     doc = {"lane": "auto_approve"}
+    _auto_approvable(tin="tin-crash")  # seeds the payment-source binding
     exe = _executor.execute(tin_hash="tin-crash", period="2026-07", tax_type="vat",
                             amount_kobo=100_000_000, decision=doc, approved_by="test")
     assert exe["status"] == "posted"
@@ -101,6 +107,7 @@ def test_post_failure_compensates_void():
     def boom(pid, post_id, amount):
         raise ValueError("simulated ledger outage")
     led.post_pending_as = boom
+    _auto_approvable(tin="tin-void")  # seeds the payment-source binding
     try:
         try:
             _executor.execute(tin_hash="tin-void", period="2026-07", tax_type="vat",
@@ -126,11 +133,13 @@ def test_manual_approve_endpoint_executes():
         assert r.json()["lane"] == "manual_review"
         assert "execution" not in r.json()
         rid = r.json()["refund_id"]
-        r2 = c.post(f"/v1/refunds/{rid}/approve", headers=H)
+        # R4: maker!=checker — a different principal must approve.
+        checker = {"X-Dev-Role": "operator", "X-Dev-Sub": "checker-1"}
+        r2 = c.post(f"/v1/refunds/{rid}/approve", headers=checker)
         assert r2.status_code == 200, r2.text
         assert r2.json()["execution"]["status"] == "posted"
         # second approve replays (no double pay)
-        r3 = c.post(f"/v1/refunds/{rid}/approve", headers=H)
+        r3 = c.post(f"/v1/refunds/{rid}/approve", headers=checker)
         assert r3.json()["execution"].get("idempotent_replay") is True
 
 

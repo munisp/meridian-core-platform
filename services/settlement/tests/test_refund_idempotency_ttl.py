@@ -51,8 +51,11 @@ def test_expired_key_treated_as_new_in_fasttrack():
 
 def test_purge_terminal_only():
     old = _iso(time.time() - 2 * REFUND_IDEMPOTENCY_TTL_SECONDS)
-    # expired + terminal (standard lane, no execution) -> purge
+    # expired + terminal (rejected standard-lane decision) -> purge
+    # (R4 S1a#4: standard lane is now executable via the approval queue,
+    # so a PENDING standard decision is in-flight and must be retained)
     d1 = _decision("rid-std", lane="standard", decided_at=old)
+    d1["status"] = "rejected"
     # expired + terminal (execution posted) -> purge
     d2 = _decision("rid-posted", decided_at=old)
     _store.put("refund_executions", "rid-posted",

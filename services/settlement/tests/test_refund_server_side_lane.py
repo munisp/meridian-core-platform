@@ -51,6 +51,11 @@ def test_server_side_profile_enables_auto_approve():
     _store.put("taxpayer_credit_profiles", "tin-good", {
         "tin_hash": "tin-good", "credit_score": 800,
         "filings_on_time": 12, "filings_total": 12})
+    # R4 S1a#3: bound original payment source required for auto execution.
+    from app.refund_execution import payment_source_key, taxpayer_account
+    _store.put("payment_sources", payment_source_key("tin-good", "*", None), {
+        "tin_hash": "tin-good", "period": "*", "tax_type": None,
+        "account_id": taxpayer_account("tin-good"), "source": "test"})
     with TestClient(app) as c:
         r = c.post("/v1/refunds/fasttrack", headers=H, json={
             "tin_hash": "tin-good", "amount_kobo": 100_000_000})
