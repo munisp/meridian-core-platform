@@ -19,12 +19,22 @@ import pytest  # noqa: E402
 
 from app.main import app, _store, _executor  # noqa: E402
 from app.refund_execution import (InprocLedger, RefundExecutor,  # noqa: E402
-                                  refund_id, taxpayer_account)
+                                  payment_source_key, refund_id,
+                                  taxpayer_account)
 from app.screening import (CounterpartySanctioned, NullScreener,  # noqa: E402
                            ScreeningUnavailable, _FailClosedScreener,
                            screener_from_env)
 
 H = {"X-Dev-Role": "operator"}
+
+
+def _bind_source(tin, period="2026-09", tax_type="vat", account=None):
+    """R4 S1a#3 (PR #64): execution requires a server-side payment-source
+    binding for (tin, period, tax_type); seed one as the recon pipeline
+    would from captured payment meta."""
+    _store.put("payment_sources", payment_source_key(tin, period, tax_type), {
+        "tin_hash": tin, "period": period, "tax_type": tax_type,
+        "account_id": account or f"acct-bound-{tin}", "source": "test"})
 
 
 def _profile(tin):
@@ -50,6 +60,7 @@ def test_sanctioned_counterparty_blocked_no_money_moves():
     """A refund whose counterparty matches a sanctions list must be
     refused BEFORE the pending transfer is created."""
     _profile("tin-sanctioned")
+    _bind_source("tin-sanctioned")
     exe = RefundExecutor(_store, _executor.ledger, screener=SanctionedScreener())
     with pytest.raises(CounterpartySanctioned):
         exe.execute(tin_hash="tin-sanctioned", period="2026-09", tax_type="vat",
@@ -66,6 +77,7 @@ def test_screening_outage_fails_closed():
     """Fail-closed: when the screening endpoint is unreachable the refund
     must NOT proceed (no silent skip)."""
     _profile("tin-outage")
+    _bind_source("tin-outage")
     exe = RefundExecutor(_store, _executor.ledger, screener=DownScreener())
     with pytest.raises(ScreeningUnavailable):
         exe.execute(tin_hash="tin-outage", period="2026-09", tax_type="vat",
@@ -89,6 +101,7 @@ def test_prod_profile_without_screening_url_fails_closed():
 
 def test_clean_counterparty_proceeds_and_records_screening():
     _profile("tin-clean")
+    _bind_source("tin-clean")
     exe = RefundExecutor(_store, _executor.ledger, screener=NullScreener())
     out = exe.execute(tin_hash="tin-clean", period="2026-09", tax_type="vat",
                       amount_kobo=100_000, decision={"lane": "auto_approve"},
@@ -102,6 +115,7 @@ def test_endpoint_blocks_sanctioned_refund_5xx_or_4xx_not_posted():
     """End-to-end through the fasttrack endpoint: a sanctioned counterparty
     never reaches 'posted'."""
     _profile("tin-sanctioned-ep")
+    _bind_source("tin-sanctioned-ep")
     orig = _executor.screener
     _executor.screener = SanctionedScreener()
     try:
