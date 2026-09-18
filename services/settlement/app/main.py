@@ -12,7 +12,7 @@ from pathlib import Path
 
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from meridian_events.auth import Claims, fastapi_dependency
@@ -46,6 +46,7 @@ def _start_relay() -> None:  # pragma: no cover
     _relay.start()
 
 
+from . import stepup as _stepup  # noqa: E402
 from .refund_execution import (RefundDestinationUnbound, RefundExecutor,  # noqa: E402
                                RefundPayloadConflict, bound_destination,
                                ledger_from_env, payment_source_key, refund_id)
@@ -215,6 +216,36 @@ def reconcile(platform: list[ReconRecord], pssp: list[ReconRecord],
     }
 
 
+# --- R4-9c: TOTP step-up enrollment (mirrors admin-api /v1/stepup/*) ---
+
+
+class StepupConfirmRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    code: str = Field(min_length=6, max_length=9)
+
+
+@app.post("/v1/stepup/enroll")
+def stepup_enroll(claims: Claims = Depends(fastapi_dependency({"admin"}))) -> dict:
+    """Start TOTP enrollment for the calling admin. Secret is sealed at
+    rest; the otpauth URI and recovery codes are shown once."""
+    out = _stepup.enroll(_store, claims.sub)
+    out.pop("secret", None)  # otpauth_uri carries it; no second copy
+    return out
+
+
+@app.post("/v1/stepup/confirm")
+def stepup_confirm(req: StepupConfirmRequest,
+                   claims: Claims = Depends(fastapi_dependency({"admin", "operator"}))) -> dict:
+    """Activate enrollment after the first valid TOTP code."""
+    try:
+        ok = _stepup.confirm(_store, claims.sub, req.code)
+    except KeyError:
+        raise HTTPException(409, "not enrolled; call /v1/stepup/enroll first") from None
+    if not ok:
+        raise HTTPException(401, "invalid TOTP code")
+    return {"status": "enabled"}
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok", "service": SERVICE, "version": VERSION}
@@ -367,7 +398,7 @@ def _check_tenant_tin_binding(claims: Claims, tin_hash: str) -> None:
 
 
 @app.post("/v1/refunds/fasttrack")
-def refund_fasttrack(req: FastTrackRequest,
+def refund_fasttrack(req: FastTrackRequest, request: Request,
                      claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
     """I3 + F2: decide the refund lane AND execute approved refunds.
     auto_approve (<= ₦5m) posts via the refund workflow; manual_review is
@@ -378,6 +409,7 @@ def refund_fasttrack(req: FastTrackRequest,
     no longer self-certify a clean recon history (audit Flow 2c)."""
     from .refund import decide_refund_lane
 
+    _stepup.require_stepup(request, claims, _store)  # R4-9c
     _check_tenant_tin_binding(claims, req.tin_hash)
     period = req.period or time.strftime("%Y-%m", time.gmtime())
     rid = refund_id(req.tin_hash, period, req.tax_type)
@@ -500,10 +532,11 @@ def _enforce_maker_checker(doc: dict, claims: Claims) -> None:
 
 
 @app.post("/v1/refunds/{rid}/approve")
-def refund_manual_approve(rid: str,
+def refund_manual_approve(rid: str, request: Request,
                           claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
     """Approve endpoint for manual_review AND standard lanes: executes the
     SAME refund workflow after human approval (idempotent per refund)."""
+    _stepup.require_stepup(request, claims, _store)  # R4-9c
     doc = _store.get("refund_decisions", rid)
     if doc is None:
         raise HTTPException(404, f"refund decision {rid}")
@@ -536,10 +569,11 @@ class RefundRejectRequest(BaseModel):
 
 
 @app.post("/v1/refunds/{rid}/reject")
-def refund_reject(rid: str, req: RefundRejectRequest,
+def refund_reject(rid: str, req: RefundRejectRequest, request: Request,
                   claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
     """Reject a queued refund decision (manual_review or standard lane).
     Rejected decisions never execute and become purge-terminal."""
+    _stepup.require_stepup(request, claims, _store)  # R4-9c
     doc = _store.get("refund_decisions", rid)
     if doc is None:
         raise HTTPException(404, f"refund decision {rid}")
@@ -562,11 +596,12 @@ class TenantTinBindingRequest(BaseModel):
 
 
 @app.post("/v1/tenants/bind-tin")
-def bind_tenant_tin(req: TenantTinBindingRequest,
+def bind_tenant_tin(req: TenantTinBindingRequest, request: Request,
                     claims: Claims = Depends(fastapi_dependency({"admin"}))) -> dict:
     """Register the server-side tenant<->TIN ownership binding used to
     authorise refund initiation. Admin-only; rebinding is allowed only by
     an admin of the currently-bound tenant."""
+    _stepup.require_stepup(request, claims, _store)  # R4-9c
     existing = _store.get("tenant_tins", req.tin_hash)
     if existing is not None and existing.get("tenant_id") != req.tenant_id:
         if not claims.tenant_id or claims.tenant_id != existing.get("tenant_id"):
@@ -579,10 +614,12 @@ def bind_tenant_tin(req: TenantTinBindingRequest,
 
 
 @app.post("/v1/refunds/sweep")
-def refund_sweep(claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
+def refund_sweep(request: Request,
+                 claims: Claims = Depends(fastapi_dependency({"operator", "admin"}))) -> dict:
     """Recovery worker hook: resume/void refund executions interrupted by a
     crash between the pending transfer and the post. Also purges expired,
     terminal refund-decision idempotency records (R4 TTL)."""
+    _stepup.require_stepup(request, claims, _store)  # R4-9c
     out = _executor.sweep_pending()
     out["idempotency_purged"] = purge_expired_refund_decisions()
     return out
