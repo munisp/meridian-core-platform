@@ -12,8 +12,8 @@ provenance:
   source_citation: Deduction of Tax at Source (WHT) Regulations 2024
 signed:
   algorithm: ed25519
-  key_id: meridian-ceremony-dev-002
-  signature: 43f00c5f9fcc6f60331e6f759524edf4d6a4045e679ae5dbfebfa49f2a416f7f2f8811f475d9043ffc9297d9bbc6ba3b83a8c92eb9a9dc0eb9e79c6e5b4b7906
+  key_id: governance-board-2026-r2
+  signature: 7a8f889ea1d0e54b26c13f675c18bd448208bfa93dff922b0f3ac4547fdb783b8d45e0ed24ffad58d95ad15125a7fc51f6784a62a5465be7f3ac3e5722130803
 rules:
 - id: wht.carveout.smallco
   description: 'Section: small companies (<= N2m fee base, no TIN exempt) carve-out'
