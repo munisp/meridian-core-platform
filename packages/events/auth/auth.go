@@ -105,12 +105,12 @@ func VerifyHS256(token string) (Claims, error) {
 	expected := mac.Sum(nil)
 	got, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return Claims{}, errors.New("bad payload encoding")
+		return Claims{}, errors.New("bad signature encoding")
 	}
 	if !hmac.Equal(expected, got) {
 		return Claims{}, errors.New("signature mismatch")
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return Claims{}, errors.New("bad payload encoding")
 	}
