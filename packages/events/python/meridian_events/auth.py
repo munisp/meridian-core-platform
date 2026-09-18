@@ -162,7 +162,8 @@ def fastapi_dependency(required_roles: set[str] | None = None):
 
     def dep(authorization: str | None = Header(default=None),
             x_dev_role: str | None = Header(default=None),
-            x_tenant_id: str | None = Header(default=None)) -> Claims:
+            x_tenant_id: str | None = Header(default=None),
+            x_dev_sub: str | None = Header(default=None)) -> Claims:
         claims: Claims | None = None
         if authorization and authorization.startswith("Bearer "):
             try:
@@ -170,7 +171,9 @@ def fastapi_dependency(required_roles: set[str] | None = None):
             except AuthError as exc:
                 raise HTTPException(401, f"invalid bearer token: {exc}") from exc
         elif os.environ.get("AUTH_MODE", "dev") == "dev" and x_dev_role in DEV_ROLES:
-            claims = Claims(sub=f"dev-{x_dev_role}", roles=[x_dev_role],
+            # Dev mode only: X-Dev-Sub distinguishes operator identities so
+            # maker!=checker controls can be exercised without keycloak.
+            claims = Claims(sub=f"dev-{x_dev_sub or x_dev_role}", roles=[x_dev_role],
                             tenant_id=x_tenant_id or "")
         if claims is None:
             raise HTTPException(401, "Bearer JWT or X-Dev-Role required")
