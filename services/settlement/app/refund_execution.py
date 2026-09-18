@@ -1,37 +1,46 @@
-"""F2 refund execution (post-NITA refund workflow).
+"""F2: refund EXECUTION behind the fast-track decision (audit Flow 2).
 
-End-to-end: refund decision -> pending transfer (funds RESERVED) -> post
-transfer (funds MOVE) with two-phase idempotency keys + compensation (void
-the pending when post fails). Real ledger via ledger_from_env() —
-TigerBeetle cluster when TIGERBEETLE_ADDRESSES is set, else the durable
-inproc dev client with TB semantics.
+The fast-track endpoint used to be a decision function only — "an approved
+refund is a JSON document". This module executes approved refunds as a real
+funds flow:
 
-Ledger saga tokens (SPEC C §4.1): the maker/settle split uses dedicated
-service tokens — MERIDIAN_LEDGER_MAKER_TOKEN for the pending-create (maker)
-and MERIDIAN_LEDGER_SETTLE_TOKEN for the post/void (settle/checker). The
-connectors themselves are read from env; a remote connector honours them,
-the inproc dev client documents the split (no-op).
+  decision -> pending TB transfer (refund treasury -> taxpayer) -> post
+           -> compensation voids the pending when the post fails
+
+Idempotency: one refund per (tin_hash, period, tax_type) — the refund id is
+a deterministic hash and every ledger leg uses deterministic transfer ids,
+so a double-submit replays the stored execution and never moves money
+twice. A crash after the pending transfer is resumed by the sweeper
+(sweep_pending), which posts or voids from actual ledger state.
+
+Ledger port: LEDGER_URL selects the core ledger REST service (prod);
+otherwise an in-process TB-semantics dev ledger (dev default, honestly
+tagged in responses as profile=dev).
 """
 from __future__ import annotations
 
 import hashlib
-import hmac as hmac_mod
 import os
 import time
-from typing import Any
+import urllib.request
+import json
+from typing import Any, Protocol
 
-from meridian_events.idgen import deterministic_id
+REFUND_LEDGER = 400  # pssp_recon ledger hosts refund treasury/taxpayer accounts
+NS_REFUND_TREASURY = 400_000_000_001
+NS_REFUND_TAXPAYER_BASE = 400_000_100_000
 
 
-# ---------------------------------------------------------------- ledger client
+def deterministic_id(seed: str) -> str:
+    return hashlib.sha256(seed.encode()).hexdigest()[:32]
 
-def ledger_from_env():
-    """Real ledger connector. TB cluster when TIGERBEETLE_ADDRESSES is set;
-    else the durable inproc dev client (double-entry + pending semantics)."""
-    addr = os.environ.get("TIGERBEETLE_ADDRESSES", "").strip()
-    if addr:
-        return TigerBeetleLedger(addr)
-    return InprocLedger(os.path.join(os.environ.get("DATA_DIR", "./data"), "tb-dev.json"))
+
+class RefundPayloadConflict(Exception):
+    """The deterministic refund key (tin_hash, period, tax_type) was reused
+    with a DIFFERENT amount. The refund id intentionally excludes the
+    amount (w2 #7), so the executor itself must bind the payload: a
+    mismatched replay is rejected (409-class), never silently served the
+    original execution."""
 
 
 def refund_id(tin_hash: str, period: str, tax_type: str | None) -> str:
@@ -66,176 +75,178 @@ def bound_destination(store: Any, tin_hash: str, period: str,
     return rec.get("account_id")
 
 
-def treasury_account() -> str:
-    return "0000000f000000010000000000000001"
+def _account_id(namespace: int, serial: int) -> str:
+    return f"{namespace:016x}{serial:016x}"
 
 
 def taxpayer_account(tin_hash: str) -> str:
-    # TB-style u128-ish id derived deterministically from the tin hash
-    h = hashlib.sha256(f"refund:{tin_hash}".encode()).hexdigest()
-    return "0000000f00000001" + h[:16]
+    serial = int(hashlib.sha256(("taxpayer:" + tin_hash).encode()).hexdigest()[:12], 16)
+    return _account_id(NS_REFUND_TAXPAYER_BASE, serial & 0x0000_FFFFFFFFFFFF)
+
+
+def treasury_account() -> str:
+    return _account_id(NS_REFUND_TREASURY, 1)
+
+
+# ---------------------------------------------------------------------------
+# Ledger ports
+# ---------------------------------------------------------------------------
+
+class LedgerPort(Protocol):
+    def create_pending(self, t: dict) -> None: ...
+    def post_pending_as(self, pending_id: str, post_id: str, amount: int) -> None: ...
+    def void_pending(self, pending_id: str) -> None: ...
+    def get_transfer(self, transfer_id: str) -> dict | None: ...
+    def ensure_account(self, account_id: str, code: int, flags: int, user_data: str) -> None: ...
 
 
 class InprocLedger:
-    """Durable dev ledger with TigerBeetle semantics (subset):
-    double-entry, pending transfers, post/void, idempotent create.
-    Mirrors services/ledger/internal/tb client semantics."""
+    """Dev-default in-process ledger with TigerBeetle semantics: pending /
+    post / void, dedup on client-supplied transfer ids (replay returns the
+    existing transfer), DEBITS_MUST_NOT_EXCEED_CREDITS on the treasury."""
 
-    FLAG_PENDING = 1
-    FLAG_POST_PENDING = 2
-    FLAG_VOID_PENDING = 4
-    FLAG_DEBITS_NOT_EXCEED_CREDITS = 8
+    FLAG_DEBITS_NOT_EXCEED_CREDITS = 1
 
-    def __init__(self, path: str):
-        self.path = path
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        self._load()
+    def __init__(self) -> None:
+        self.accounts: dict[str, dict] = {}
+        self.transfers: dict[str, dict] = {}
 
-    def _load(self):
-        try:
-            import json
-            with open(self.path) as f:
-                d = json.load(f)
-            self.accounts = d.get("accounts", {})
-            self.transfers = d.get("transfers", {})
-        except Exception:
-            self.accounts, self.transfers = {}, {}
+    def ensure_account(self, account_id: str, code: int, flags: int, user_data: str) -> None:
+        self.accounts.setdefault(account_id, {
+            "id": account_id, "code": code, "flags": flags, "user_data": user_data,
+            "debits_posted": 0, "credits_posted": 0,
+            "debits_pending": 0, "credits_pending": 0})
 
-    def _save(self):
-        import json
-        tmp = self.path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump({"accounts": self.accounts, "transfers": self.transfers}, f)
-        os.replace(tmp, self.path)
+    def _check(self, acct: dict, d_post: int, c_post: int, d_pend: int = 0, c_pend: int = 0) -> None:
+        if acct["flags"] & self.FLAG_DEBITS_NOT_EXCEED_CREDITS:
+            if acct["debits_posted"] + acct["debits_pending"] + d_post + d_pend > \
+                    acct["credits_posted"] + c_post:
+                raise ValueError("ledger: debits_must_not_exceed_credits violated")
 
-    def ensure_account(self, account_id: str, ledger: int = 1, flags: int = 0, code: str = "") -> None:
-        if account_id not in self.accounts:
-            self.accounts[account_id] = {
-                "id": account_id, "ledger": ledger, "flags": flags, "code": code,
-                "debits_posted": 0, "credits_posted": 0, "debits_pending": 0, "credits_pending": 0,
-            }
-            self._save()
+    def create_pending(self, t: dict) -> None:
+        if t["id"] in self.transfers:
+            return  # idempotent replay
+        dr, cr = self.accounts[t["debit"]], self.accounts[t["credit"]]
+        self._check(dr, 0, 0, d_pend=t["amount_kobo"])
+        self._check(cr, 0, 0, c_pend=t["amount_kobo"])
+        dr["debits_pending"] += t["amount_kobo"]
+        cr["credits_pending"] += t["amount_kobo"]
+        self.transfers[t["id"]] = {**t, "pending": True, "resolved": False}
 
-    def create_pending(self, *, transfer_id: str, debit: str, credit: str, amount_kobo: int) -> dict:
-        """Idempotent pending create (two-phase key = transfer_id)."""
-        if transfer_id in self.transfers:
-            return self.transfers[transfer_id]
-        a, b = self.accounts[debit], self.accounts[credit]
-        if (a["flags"] & self.FLAG_DEBITS_NOT_EXCEED_CREDITS) and \
-           a["debits_posted"] + a["debits_pending"] + amount_kobo > a["credits_posted"] + a["credits_pending"]:
-            raise ValueError(f"EXCEEDS_CREDITS on {debit}")
-        a["debits_pending"] += amount_kobo
-        b["credits_pending"] += amount_kobo
-        t = {"id": transfer_id, "debit": debit, "credit": credit,
-             "amount_kobo": amount_kobo, "pending": True, "resolved": False}
-        self.transfers[transfer_id] = t
-        self._save()
-        return t
+    def post_pending_as(self, pending_id: str, post_id: str, amount: int) -> None:
+        pt = self.transfers.get(pending_id)
+        if pt is None:
+            raise ValueError("ledger: pending transfer not found")
+        if pt["resolved"]:
+            post = self.transfers.get(post_id)
+            if post and post["amount_kobo"] == amount:
+                return  # idempotent replay
+            raise ValueError("ledger: transfer is not pending")
+        dr, cr = self.accounts[pt["debit"]], self.accounts[pt["credit"]]
+        dr["debits_pending"] -= pt["amount_kobo"]
+        cr["credits_pending"] -= pt["amount_kobo"]
+        self._check(dr, amount, 0)
+        self._check(cr, 0, amount)
+        dr["debits_posted"] += amount
+        cr["credits_posted"] += amount
+        pt["resolved"] = True
+        self.transfers[post_id] = {"id": post_id, "debit": pt["debit"], "credit": pt["credit"],
+                                   "amount_kobo": amount, "code": 2, "pending": False, "resolved": True}
 
-    def post_pending(self, *, pending_id: str, post_id: str, amount_kobo: int | None = None) -> dict:
-        if post_id in self.transfers:
-            return self.transfers[post_id]
-        pend = self.transfers.get(pending_id)
-        if pend is None or not pend["pending"] or pend["resolved"]:
-            raise ValueError("pending transfer not postable")
-        amt = amount_kobo if amount_kobo is not None else pend["amount_kobo"]
-        if amt > pend["amount_kobo"]:
-            raise ValueError("post amount exceeds pending")
-        a, b = self.accounts[pend["debit"]], self.accounts[pend["credit"]]
-        if (a["flags"] & self.FLAG_DEBITS_NOT_EXCEED_CREDITS) and \
-           a["debits_posted"] + amt > a["credits_posted"]:
-            raise ValueError(f"EXCEEDS_CREDITS on {pend['debit']}")
-        a["debits_pending"] -= pend["amount_kobo"]
-        b["credits_pending"] -= pend["amount_kobo"]
-        a["debits_posted"] += amt
-        b["credits_posted"] += amt
-        if amt == pend["amount_kobo"]:
-            pend["resolved"] = True
-            pend["pending"] = False
-        else:  # partial capture: remainder stays pending
-            pend["amount_kobo"] -= amt
-            a["debits_pending"] += pend["amount_kobo"]
-            b["credits_pending"] += pend["amount_kobo"]
-        t = {"id": post_id, "debit": pend["debit"], "credit": pend["credit"],
-             "amount_kobo": amt, "pending": False, "resolved": True, "posts": pending_id}
-        self.transfers[post_id] = t
-        self._save()
-        return t
-
-    def void_pending(self, *, pending_id: str, void_id: str) -> dict:
-        if void_id in self.transfers:
-            return self.transfers[void_id]
-        pend = self.transfers.get(pending_id)
-        if pend is None or not pend["pending"] or pend["resolved"]:
-            raise ValueError("pending transfer not voidable")
-        a, b = self.accounts[pend["debit"]], self.accounts[pend["credit"]]
-        a["debits_pending"] -= pend["amount_kobo"]
-        b["credits_pending"] -= pend["amount_kobo"]
-        pend["resolved"] = True
-        pend["pending"] = False
-        t = {"id": void_id, "debit": pend["debit"], "credit": pend["credit"],
-             "amount_kobo": pend["amount_kobo"], "pending": False, "resolved": True, "voids": pending_id}
-        self.transfers[void_id] = t
-        self._save()
-        return t
+    def void_pending(self, pending_id: str) -> None:
+        pt = self.transfers.get(pending_id)
+        if pt is None or pt["resolved"]:
+            return  # idempotent
+        self.accounts[pt["debit"]]["debits_pending"] -= pt["amount_kobo"]
+        self.accounts[pt["credit"]]["credits_pending"] -= pt["amount_kobo"]
+        pt["resolved"] = True
+        pt["pending"] = False
 
     def get_transfer(self, transfer_id: str) -> dict | None:
         return self.transfers.get(transfer_id)
 
 
-class TigerBeetleLedger:
-    """Remote TigerBeetle connector (SPEC C §4.2): uses the real
-    tigerbeetle-go client via the ledger service TB backend when deployed;
-    here we hold maker/settle tokens from env (SPEC C §4.1) and fail loudly
-    if the cluster is unreachable (no silent dev fallback in prod)."""
+class HTTPLedger:
+    """Core ledger REST service client (prod profile; LEDGER_URL).
 
-    def __init__(self, addresses: str):
-        self.addresses = [a.strip() for a in addresses.split(",") if a.strip()]
-        self.maker_token = os.environ.get("MERIDIAN_LEDGER_MAKER_TOKEN", "")
-        self.settle_token = os.environ.get("MERIDIAN_LEDGER_SETTLE_TOKEN", "")
-        self._client = None
+    B2-#12 repair (V2 round): service-to-service auth uses DISTINCT
+    maker/checker tokens. The maker token (MERIDIAN_LEDGER_MAKER_TOKEN /
+    LEDGER_MAKER_TOKEN) grants ledger:post only and is sent on
+    pending-create; the settle token (MERIDIAN_LEDGER_SETTLE_TOKEN /
+    LEDGER_SETTLE_TOKEN) grants ledger:settle only and is sent on
+    post/void. No single token runs the full hold->settle saga. The
+    forgeable X-Dev-Role header is a dev-only fallback when no token is
+    configured.
+    """
 
-    def _connect(self):
-        if self._client is None:
-            raise RuntimeError(
-                "TigerBeetle remote connector requires the ledger service sidecar "
-                f"(addresses={self.addresses}); run refunds through services/ledger "
-                "in this deployment")
-        return self._client
+    def __init__(self, base: str) -> None:
+        self.base = base.rstrip("/")
+        self.maker_token = os.environ.get("MERIDIAN_LEDGER_MAKER_TOKEN") or os.environ.get("LEDGER_MAKER_TOKEN")
+        self.settle_token = os.environ.get("MERIDIAN_LEDGER_SETTLE_TOKEN") or os.environ.get("LEDGER_SETTLE_TOKEN")
 
-    def ensure_account(self, account_id, ledger=1, flags=0, code=""):
-        self._connect()
+    def _call(self, method: str, path: str, body: dict | None = None,
+              service_token: str | None = None) -> dict:
+        headers = {"Content-Type": "application/json", "X-Service-Name": "settlement"}
+        if service_token:
+            headers["X-Service-Token"] = service_token
+        else:
+            headers["X-Dev-Role"] = "operator"  # dev only
+        req = urllib.request.Request(
+            self.base + path, method=method,
+            data=json.dumps(body).encode() if body is not None else None,
+            headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            return json.loads(resp.read() or b"{}")
 
-    def create_pending(self, **kw):
-        return self._connect().create_pending(**kw)
+    def ensure_account(self, account_id: str, code: int, flags: int, user_data: str) -> None:
+        self._call("POST", "/v1/accounts", {
+            "namespace": REFUND_LEDGER, "id": account_id, "code": code,
+            "flags": flags, "user_data": user_data})
 
-    def post_pending(self, **kw):
-        return self._connect().post_pending(**kw)
+    def create_pending(self, t: dict) -> None:
+        self._call("POST", "/v1/transfers/pending", {
+            "id": t["id"], "debit_account_id": t["debit"], "credit_account_id": t["credit"],
+            "amount_kobo": t["amount_kobo"], "ledger": REFUND_LEDGER, "code": t.get("code", 1),
+            "timeout_seconds": t.get("timeout_seconds", 0)}, service_token=self.maker_token)
 
-    def void_pending(self, **kw):
-        return self._connect().void_pending(**kw)
+    def post_pending_as(self, pending_id: str, post_id: str, amount: int) -> None:
+        self._call("POST", f"/v1/transfers/{pending_id}/post",
+                   {"amount_kobo": amount, "post_id": post_id},
+                   service_token=self.settle_token)
 
-    def get_transfer(self, tid):
-        return self._connect().get_transfer(tid)
+    def void_pending(self, pending_id: str) -> None:
+        self._call("POST", f"/v1/transfers/{pending_id}/void",
+                   service_token=self.settle_token)
+
+    def get_transfer(self, transfer_id: str) -> dict | None:
+        try:
+            return self._call("GET", f"/v1/transfers/{transfer_id}")
+        except Exception:  # noqa: BLE001
+            return None
 
 
-# ---------------------------------------------------------------- executor
+def ledger_from_env() -> LedgerPort:
+    url = os.environ.get("LEDGER_URL", "")
+    if url:
+        return HTTPLedger(url)
+    return InprocLedger()
 
-class RefundPayloadConflict(Exception):
-    pass
+
+# ---------------------------------------------------------------------------
+# Refund execution workflow
+# ---------------------------------------------------------------------------
+
+EXEC_PENDING_TTL_SECONDS = int(os.environ.get("REFUND_PENDING_TTL_SECONDS", 1800))
 
 
 class RefundExecutor:
-    """Executes refund decisions against the ledger with:
-    - two-phase idempotency: deterministic pending/post/void ids per refund
-    - replay: an existing execution with the same payload returns the record
-    - compensation: a failed post voids the pending reservation
-    - resume: sweep_pending() re-posts executions stranded mid-flight
-    """
+    """Executes refund decisions as pending -> post ledger sagas with void
+    compensation, idempotent per (tin_hash, period, tax_type)."""
 
-    def __init__(self, store, ledger):
+    def __init__(self, store: Any, ledger: LedgerPort, outbox: Any | None = None) -> None:
         self.store = store
         self.ledger = ledger
+        self.outbox = outbox
 
     def _accounts(self, tin_hash: str, destination: str) -> tuple[str, str]:
         tre = treasury_account()
@@ -246,6 +257,31 @@ class RefundExecutor:
         # account, not a tin-derived internal account.
         self.ledger.ensure_account(destination, 1, 0, "refund-destination:original-source")
         return tre, destination
+
+    def ledger_transfer(self, debit: str, credit: str, amount_kobo: int, seed: str) -> str:
+        """Immediate transfer with a deterministic id (InprocLedger dev
+        path; prod funding happens upstream of the workflow)."""
+        tid = deterministic_id(seed)
+        led = self.ledger
+        if tid in led.transfers:
+            return tid
+        dr, cr = led.accounts[debit], led.accounts[credit]
+        led._check(dr, amount_kobo, 0)
+        led._check(cr, 0, amount_kobo)
+        dr["debits_posted"] += amount_kobo
+        cr["credits_posted"] += amount_kobo
+        led.transfers[tid] = {"id": tid, "debit": debit, "credit": credit,
+                              "amount_kobo": amount_kobo, "code": 4, "pending": False}
+        return tid
+
+    def _emit(self, topic: str, payload: dict) -> None:
+        """F8: outbox pattern — the event is written with the state change
+        (same request); the relay publishes at-least-once. Consumer dedup
+        key: payload['dedup_key']."""
+        if self.outbox is None:
+            return
+        from meridian_events.envelope import new_envelope
+        self.outbox.append(topic, new_envelope(topic, "settlement", payload))
 
     def execute(self, *, tin_hash: str, period: str, tax_type: str | None,
                 amount_kobo: int, decision: dict, approved_by: str,
@@ -267,76 +303,114 @@ class RefundExecutor:
                 f"bound original payment source {bound}")
         rid = refund_id(tin_hash, period, tax_type)
         existing = self.store.get("refund_executions", rid)
-        if existing is not None:
-            if existing["amount_kobo"] != amount_kobo or existing["tax_type"] != (tax_type or "any"):
+        if existing is not None and existing.get("status") in ("posted", "pending"):
+            if existing.get("amount_kobo") != amount_kobo:
                 raise RefundPayloadConflict(
-                    f"refund {rid} exists with different payload")
-            if existing["status"] in ("posted", "pending"):
-                existing["idempotent_replay"] = True
-                return existing
-            # post_failed / voided -> re-execute with fresh attempt ids
+                    f"refund {rid} already executed for "
+                    f"{existing.get('amount_kobo')} kobo; refusing replay with "
+                    f"{amount_kobo} kobo under the same (tin, period, tax_type) key")
+            return {**existing, "idempotent_replay": True}
+        # post_failed: the compensation voided the original pending, so a
+        # retry must use a fresh deterministic attempt id (create_pending
+        # dedups on the transfer id and a voided id cannot be re-posted).
+        # "failed" (pending never created) retries under the original ids.
+        attempt = 0
+        if existing is not None and existing.get("status") == "post_failed":
+            attempt = int(existing.get("attempt", 0)) + 1
         tre, tax = self._accounts(tin_hash, bound)
-        attempt = (existing or {}).get("attempt", 0) + 1
-        pend_id = deterministic_id(f"ref-pend:{rid}:{attempt}")
-        post_id = deterministic_id(f"ref-post:{rid}:{attempt}")
-        void_id = deterministic_id(f"ref-void:{rid}:{attempt}")
-        rec = {
-            "refund_id": rid, "tin_hash": tin_hash, "period": period,
-            "tax_type": tax_type or "any", "amount_kobo": amount_kobo,
-            "attempt": attempt, "lane": decision.get("lane"),
-            "approved_by": approved_by,
-            "decision_reasons": decision.get("reasons", []),
+        # fund the refund treasury from the budget-offset account for this
+        # refund (idempotent per refund id; the treasury enforces
+        # debits<=credits so unfunded refunds cannot execute)
+        offset = _account_id(NS_REFUND_TREASURY, 2)
+        self.ledger.ensure_account(offset, 1, 0, "nrs-refund-budget-offset")
+        if isinstance(self.ledger, InprocLedger):
+            self.ledger_transfer(offset, tre, amount_kobo, "ref-fund:" + rid)
+        pend_id = deterministic_id("ref-pend:" + rid) if attempt == 0 \
+            else deterministic_id(f"ref-pend:{rid}:{attempt}")
+        post_id = deterministic_id("ref-post:" + rid) if attempt == 0 \
+            else deterministic_id(f"ref-post:{rid}:{attempt}")
+        exe = {
+            "refund_id": rid, "tin_hash": tin_hash, "period": period, "tax_type": tax_type,
+            "amount_kobo": amount_kobo, "lane": decision.get("lane"), "attempt": attempt,
             "treasury_account": tre, "taxpayer_account": tax,
             "destination_bound": True,
             "pending_transfer_id": pend_id, "post_transfer_id": post_id,
-            "status": "pending", "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "status": "pending", "approved_by": approved_by,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-        self.store.put("refund_executions", rid, rec)
-        # funds RESERVED (pending) — crash-safe: record persisted before post
-        self.ledger.create_pending(transfer_id=pend_id, debit=tre, credit=tax,
-                                   amount_kobo=amount_kobo)
+        # NOTE: every store write below persists a COPY (dict(exe)) — the
+        # executor keeps mutating exe in place, and a failed write must not
+        # leave the stored document aliasing later in-memory state (R7:
+        # found via db-fault injection on the 'posted' write).
         try:
-            self.ledger.post_pending(pending_id=pend_id, post_id=post_id,
-                                     amount_kobo=amount_kobo)
-        except Exception:
-            # compensation: void the pending reservation, mark for retry
-            try:
-                self.ledger.void_pending(pending_id=pend_id, void_id=void_id)
-            except Exception:
-                pass
-            rec["status"] = "post_failed"
-            self.store.put("refund_executions", rid, rec)
+            self.ledger.create_pending({
+                "id": pend_id, "debit": tre, "credit": tax,
+                "amount_kobo": amount_kobo, "code": 1,
+                "timeout_seconds": EXEC_PENDING_TTL_SECONDS})
+        except Exception as exc:  # noqa: BLE001
+            exe["status"] = "failed"
+            exe["fail_reason"] = f"create pending: {exc}"
+            self.store.put("refund_executions", rid, dict(exe))
             raise
-        rec["status"] = "posted"
-        rec["posted_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        self.store.put("refund_executions", rid, rec)
-        return rec
+        # single durable write binding BOTH transfer ids before the post
+        self.store.put("refund_executions", rid, dict(exe))
+        return self._finish(rid, exe, amount_kobo)
+
+    def _finish(self, rid: str, exe: dict, amount_kobo: int) -> dict:
+        try:
+            self.ledger.post_pending_as(exe["pending_transfer_id"], exe["post_transfer_id"], amount_kobo)
+        except Exception as exc:  # noqa: BLE001
+            # compensation: void the pending hold, never leave it dangling
+            self.ledger.void_pending(exe["pending_transfer_id"])
+            exe["status"] = "post_failed"
+            exe["fail_reason"] = f"post pending: {exc}"
+            self.store.put("refund_executions", rid, dict(exe))
+            raise
+        exe["status"] = "posted"
+        exe["posted_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.store.put("refund_executions", rid, dict(exe))
+        self._emit("nrs.refund.executed.v1", {
+            "dedup_key": "refund:" + rid, "refund_id": rid, "tin_hash": exe["tin_hash"],
+            "amount_kobo": amount_kobo, "period": exe["period"], "tax_type": exe["tax_type"],
+            "post_transfer_id": exe["post_transfer_id"]})
+        return exe
 
     def sweep_pending(self) -> dict:
-        """Crash-resume: re-post executions stranded in status=pending."""
-        resumed = 0
-        for rec in list(self.store.list("refund_executions")):
-            if rec.get("status") != "pending":
+        """Recovery worker: resume or void executions interrupted by a crash
+        between the pending transfer and the post (F2 test: crash after
+        pending = sweep resumes)."""
+        resumed = voided = 0
+        for exe in self.store.list("refund_executions"):
+            if exe.get("status") != "pending":
                 continue
-            try:
-                self.ledger.post_pending(pending_id=rec["pending_transfer_id"],
-                                         post_id=rec["post_transfer_id"],
-                                         amount_kobo=rec["amount_kobo"])
-                rec["status"] = "posted"
-                rec["posted_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                self.store.put("refund_executions", rec["refund_id"], rec)
+            post = self.ledger.get_transfer(exe["post_transfer_id"])
+            pend = self.ledger.get_transfer(exe["pending_transfer_id"])
+            if post is not None:
+                # the post actually landed before the crash: mark posted
+                exe["status"] = "posted"
+                exe["posted_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                self.store.put("refund_executions", exe["refund_id"], dict(exe))
                 resumed += 1
-            except Exception:
-                continue
-        return {"resumed": resumed}
-
-
-# ---------------------------------------------------------------- TAT seal helper
-
-def seal_execution_record(rec: dict) -> str:
-    """HMAC seal over the execution record for the TAT evidence bundle."""
-    key = os.environ.get("TAT_SEAL_KEY", "meridian-dev-tat-seal").encode()
-    msg = "|".join(str(rec.get(k, "")) for k in (
-        "refund_id", "tin_hash", "period", "tax_type", "amount_kobo",
-        "status", "pending_transfer_id", "post_transfer_id"))
-    return hmac_mod.new(key, msg.encode(), hashlib.sha256).hexdigest()
+            elif pend is not None and pend.get("pending") and not pend.get("resolved"):
+                try:
+                    self._finish(exe["refund_id"], exe, exe["amount_kobo"])
+                    resumed += 1
+                except Exception:  # noqa: BLE001
+                    pass
+            elif pend is not None and pend.get("resolved") and pend.get("pending"):
+                # FF-3: the pending resolved as POSTED, not voided (posted
+                # pendings keep pending=true; voided ones flip pending=false).
+                # The money moved, so the refund is posted — never mark it
+                # "voided" merely because the post record was not resolvable
+                # under post_transfer_id (pre-fix HTTP ledger ignored post_id
+                # and exposed no single-transfer lookup).
+                exe["status"] = "posted"
+                exe["posted_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                self.store.put("refund_executions", exe["refund_id"], dict(exe))
+                resumed += 1
+            else:
+                exe["status"] = "voided"
+                exe["fail_reason"] = "sweeper: pending missing or already resolved"
+                self.store.put("refund_executions", exe["refund_id"], dict(exe))
+                voided += 1
+        return {"resumed": resumed, "voided": voided}
