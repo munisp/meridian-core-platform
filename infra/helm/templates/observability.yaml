@@ -1,9 +1,10 @@
-# Observability stack (Prometheus + Alertmanager + Grafana) — assurance D4/D2.
-# Rendered only when .Values.observability.enabled is true (prod default;
-# dev keeps it off — compose covers the dev profile). Configs are the same
-# files used by docker-compose.prod.yml (infra/observability/*), embedded as
-# ConfigMaps so helm and compose cannot drift.
+# Observability stack: Prometheus + Alertmanager + Grafana (assurance D4).
+# Config files are embedded from helm/files/ (copies of infra/observability/*
+# — kept in sync by review; helm cannot reference paths outside the chart).
+# Rendered ConfigMaps mount into the pods; Grafana gets admin creds from a
+# Secret and a datasource ConfigMap provisioning Prometheus.
 {{- if .Values.observability.enabled }}
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,9 +12,9 @@ metadata:
   namespace: monitoring
 data:
   prometheus.yml: |
-{{ .Files.Get "files/prometheus.yml" | indent 4 }}
+    {{- .Files.Get "files/prometheus.yml" | nindent 4 }}
   alerts.yml: |
-{{ .Files.Get "files/alerts.yml" | indent 4 }}
+    {{- .Files.Get "files/alerts.yml" | nindent 4 }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -22,7 +23,23 @@ metadata:
   namespace: monitoring
 data:
   alertmanager.yml: |
-{{ .Files.Get "files/alertmanager.yml" | indent 4 }}
+    {{- .Files.Get "files/alertmanager.yml" | nindent 4 }}
+---
+# Grafana datasource provisioning (Prometheus).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.monitoring.svc.cluster.local:9090
+        isDefault: true
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -41,30 +58,34 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: prometheus
           image: {{ .Values.observability.prometheus.image | default "prom/prometheus:v2.53.0" }}
           args:
             - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
             - --storage.tsdb.retention.time={{ .Values.observability.prometheus.retention | default "30d" }}
+            - --web.enable-lifecycle
           ports:
             - {containerPort: 9090, protocol: TCP}
-          readinessProbe:
-            httpGet: {path: /-/ready, port: 9090}
-          livenessProbe:
-            httpGet: {path: /-/healthy, port: 9090}
           volumeMounts:
             - {name: config, mountPath: /etc/prometheus, readOnly: true}
             - {name: data, mountPath: /prometheus}
+          readinessProbe:
+            httpGet: {path: /-/ready, port: 9090}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
           resources:
-            requests: {cpu: "250m", memory: 512Mi}
-            limits: {cpu: "1", memory: 2Gi}
+            requests: {cpu: "500m", memory: 2Gi}
+            limits: {cpu: "2", memory: 8Gi}
       volumes:
-        - name: config
-          configMap: {name: prometheus-config}
-        - name: data
-          emptyDir: {}
+        - {name: config, configMap: {name: prometheus-config}}
+        - {name: data, emptyDir: {}}
 ---
 apiVersion: v1
 kind: Service
@@ -93,24 +114,31 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65534
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: alertmanager
           image: {{ .Values.observability.alertmanager.image | default "prom/alertmanager:v0.27.0" }}
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
           ports:
             - {containerPort: 9093, protocol: TCP}
-          readinessProbe:
-            httpGet: {path: /-/ready, port: 9093}
-          livenessProbe:
-            httpGet: {path: /-/healthy, port: 9093}
           volumeMounts:
             - {name: config, mountPath: /etc/alertmanager, readOnly: true}
+            - {name: data, mountPath: /alertmanager}
+          readinessProbe:
+            httpGet: {path: /-/ready, port: 9093}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
           resources:
-            requests: {cpu: "50m", memory: 64Mi}
-            limits: {cpu: "250m", memory: 256Mi}
+            requests: {cpu: "100m", memory: 128Mi}
+            limits: {cpu: "500m", memory: 512Mi}
       volumes:
-        - name: config
-          configMap: {name: alertmanager-config}
+        - {name: config, configMap: {name: alertmanager-config}}
+        - {name: data, emptyDir: {}}
 ---
 apiVersion: v1
 kind: Service
@@ -139,6 +167,8 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
+        runAsUser: 472
+        fsGroup: 472
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: grafana
@@ -148,26 +178,23 @@ spec:
               valueFrom: {secretKeyRef: {name: grafana-admin, key: username}}
             - name: GF_SECURITY_ADMIN_PASSWORD
               valueFrom: {secretKeyRef: {name: grafana-admin, key: password}}
-            - {name: GF_USERS_ALLOW_SIGN_UP, value: "false"}
           ports:
             - {containerPort: 3000, protocol: TCP}
+          volumeMounts:
+            - {name: datasources, mountPath: /etc/grafana/provisioning/datasources, readOnly: true}
+            - {name: data, mountPath: /var/lib/grafana}
           readinessProbe:
             httpGet: {path: /api/health, port: 3000}
-          volumeMounts:
-            - {name: provisioning, mountPath: /etc/grafana/provisioning, readOnly: true}
-            - {name: dashboards, mountPath: /var/lib/grafana/dashboards, readOnly: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities: {drop: [ALL]}
           resources:
-            requests: {cpu: "100m", memory: 128Mi}
-            limits: {cpu: "500m", memory: 512Mi}
+            requests: {cpu: "100m", memory: 256Mi}
+            limits: {cpu: "500m", memory: 1Gi}
       volumes:
-        # Provisioning + dashboards are the infra/observability/grafana tree,
-        # applied out-of-band: kubectl create configmap grafana-provisioning
-        # --from-file=infra/observability/grafana/provisioning (and
-        # grafana-dashboards --from-file=.../grafana/dashboards).
-        - name: provisioning
-          configMap: {name: grafana-provisioning}
-        - name: dashboards
-          configMap: {name: grafana-dashboards}
+        - {name: datasources, configMap: {name: grafana-datasources}}
+        - {name: data, emptyDir: {}}
 ---
 apiVersion: v1
 kind: Service
@@ -179,17 +206,17 @@ spec:
   ports:
     - {name: http, port: 3000, targetPort: 3000}
 ---
-# OTel collector (otel-foundation wave): single OTLP ingress + Prometheus
-# re-export. Config is the same file used by docker-compose (embedded so
-# helm and compose cannot drift).
+# OTel collector (otel-foundation wave): config from helm/files copy of
+# infra/observability/otel-collector-config.yaml. meridian-postgres Secret
+# referenced for the postgresql receiver (OTELCOL_PG_PASSWORD).
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: otel-collector-config
+  name: otelcol-config
   namespace: monitoring
 data:
   config.yaml: |
-{{ .Files.Get "files/otel-collector-config.yaml" | indent 4 }}
+    {{- .Files.Get "files/otel-collector-config.yaml" | nindent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -210,7 +237,7 @@ spec:
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
       containers:
-        - name: otel-collector
+        - name: otelcol
           image: {{ .Values.observability.otelcol.image | default "otel/opentelemetry-collector-contrib:0.111.0" }}
           args: ["--config=/etc/otelcol-contrib/config.yaml"]
           env:
@@ -221,16 +248,19 @@ spec:
             - {containerPort: 4318, protocol: TCP}
             - {containerPort: 9464, protocol: TCP}
             - {containerPort: 8888, protocol: TCP}
-          readinessProbe:
-            httpGet: {path: /, port: 8888}
           volumeMounts:
             - {name: config, mountPath: /etc/otelcol-contrib, readOnly: true}
+          readinessProbe:
+            httpGet: {path: /metrics, port: 8888}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
           resources:
-            requests: {cpu: "100m", memory: 256Mi}
-            limits: {cpu: "500m", memory: 768Mi}  # keep > memory_limiter limit_mib=512
+            requests: {cpu: "200m", memory: 512Mi}
+            limits: {cpu: "1", memory: 1Gi}
       volumes:
-        - name: config
-          configMap: {name: otel-collector-config}
+        - {name: config, configMap: {name: otelcol-config}}
 ---
 apiVersion: v1
 kind: Service
@@ -244,4 +274,54 @@ spec:
     - {name: otlp-http, port: 4318, targetPort: 4318}
     - {name: prom, port: 9464, targetPort: 9464}
     - {name: self-metrics, port: 8888, targetPort: 8888}
+---
+# R4 (S2 finding #2): real trace backend. The collector config exports
+# traces via otlp/jaeger to jaeger:4317; without this Deployment every
+# span was debug-logged-and-dropped.
+{{- if .Values.observability.jaeger.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: monitoring
+  labels: {app: jaeger}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: jaeger}
+  template:
+    metadata:
+      labels: {app: jaeger}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: jaeger
+          image: {{ .Values.observability.jaeger.image | default "jaegertracing/all-in-one:1.60" }}
+          env:
+            - {name: COLLECTOR_OTLP_ENABLED, value: "true"}
+          ports:
+            - {containerPort: 4317, protocol: TCP}
+            - {containerPort: 4318, protocol: TCP}
+            - {containerPort: 16686, protocol: TCP}
+          readinessProbe:
+            httpGet: {path: /, port: 16686}
+          resources:
+            requests: {cpu: "100m", memory: 256Mi}
+            limits: {cpu: "500m", memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: monitoring
+spec:
+  selector: {app: jaeger}
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: 4317}
+    - {name: otlp-http, port: 4318, targetPort: 4318}
+    - {name: ui, port: 16686, targetPort: 16686}
+{{- end }}
 {{- end }}
