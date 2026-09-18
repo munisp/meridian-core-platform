@@ -4,6 +4,12 @@ package httpx_test
 // in-memory exporter must observe one SERVER span named "<METHOD> <route>"
 // carrying tenant.id, and the wrapped handler must behave identically when
 // telemetry is disabled (fail-soft on money paths).
+//
+// R4 (otelx tenant-attribution hardening): tenant.id is stamped ONLY from a
+// token verified by the platform verifier (otelx.TenantVerifier) — never from
+// caller-controlled X-Meridian-Tenant/X-Tenant-ID headers or inbound baggage,
+// which are stripped at the server edge. This test therefore registers a stub
+// verifier and asserts the spoofed header is ignored.
 
 import (
 	"net/http"
@@ -11,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/munisp/meridian-core-platform/packages/events/httpx"
+	"github.com/munisp/meridian-core-platform/packages/events/otelx"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -33,6 +40,18 @@ func setupInMemory(t *testing.T) *tracetest.InMemoryExporter {
 func TestOTelMiddlewareServerSpan(t *testing.T) {
 	exp := setupInMemory(t)
 
+	// Stub the platform tenant verifier (normally registered by auth): only
+	// this verified claim may stamp tenant.id. The spoofed X-Meridian-Tenant
+	// header below must be stripped, not trusted.
+	prev := otelx.TenantVerifier
+	otelx.TenantVerifier = func(authorizationHeader string) string {
+		if authorizationHeader == "Bearer stub-verified-token" {
+			return "tenant-42"
+		}
+		return ""
+	}
+	t.Cleanup(func() { otelx.TenantVerifier = prev })
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/ping/{id}", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]string{"ok": "1"})
@@ -41,7 +60,8 @@ func TestOTelMiddlewareServerSpan(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest("GET", srv.URL+"/v1/ping/abc", nil)
-	req.Header.Set("X-Meridian-Tenant", "tenant-42")
+	req.Header.Set("X-Meridian-Tenant", "attacker-spoofed")
+	req.Header.Set("Authorization", "Bearer stub-verified-token")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("request: %v", err)
@@ -69,7 +89,7 @@ func TestOTelMiddlewareServerSpan(t *testing.T) {
 		}
 	}
 	if tenant != "tenant-42" {
-		t.Errorf("tenant.id = %q, want tenant-42", tenant)
+		t.Errorf("tenant.id = %q, want tenant-42 (verified claim, not spoofed header)", tenant)
 	}
 	if route != "/v1/ping/{id}" {
 		t.Errorf("http.route = %q", route)
@@ -85,6 +105,6 @@ func TestOTelMiddlewareDisabledPassthrough(t *testing.T) {
 	rec := httptest.NewRecorder()
 	httpx.NewServer(":", mux).Handler.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (telemetry must never block requests)", rec.Code)
+		t.Errorf("status = %d, want 200 (telemetry must never block requests)", rec.Code)
 	}
 }
