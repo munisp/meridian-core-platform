@@ -4,13 +4,13 @@
       "algorithm": "ed25519",
       "public_key_hex": "b2ff472e90baec10063060f374780f5e6df0c295a421af74d28b2e276f98c529",
       "trust": "canonical",
-      "note": "Canonical governance key: signs every published pack in munisp/meridian-rule-packs (tools/keys/governance-board-2026.ed25519.public). Pinned here so the verifying loader accepts canonical signed packs; without this pin every canonical pack was rejected as 'unknown signing key_id' (R4 trust-root break). The former dev private key for this key_id was committed by mistake and is BURNED (removed from meridian-rule-packs); rotate to a new key_id at the next ceremony."
+      "note": "Canonical governance key: signs every published pack in munisp/meridian-rule-packs (tools/keys/governance-board-2026.ed25519.public). Signatures are ed25519 over the ceremony canonical YAML bytes (meridian-ceremony-canonical-yaml/v1). The former dev private key for this key_id was committed by mistake and is BURNED (removed from meridian-rule-packs); rotate to a new key_id at the next ceremony."
     },
-    "meridian-ceremony-dev-001": {
+    "meridian-ceremony-dev-002": {
       "algorithm": "ed25519",
-      "public_key_hex": "2c134662ef09e22de4287acb5cbf1310b00bc46b46a72106378bef6c9fd635db",
+      "public_key_hex": "9579a5ccca7515aced0fa712a0e63c20cb999848145e11454e763fa304170e90",
       "trust": "seed-dev",
-      "note": "[seed] dev ceremony key committed so integrity paths are exercisable; prod keys are held by the offline ceremony and distributed out-of-band."
+      "note": "[seed] dev key for core's vendored sample packs, re-signed under the ceremony canonical-YAML contract (R4 contract bridge; supersedes meridian-ceremony-dev-001 whose JSON-digest signatures are retired). Private key discarded after one-shot re-signing; prod keys are held by the offline ceremony and distributed out-of-band."
     }
   }
 }
