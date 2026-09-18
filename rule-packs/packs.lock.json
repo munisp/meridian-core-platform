@@ -73,7 +73,7 @@
     },
     "rp-vat-rates": {
       "version": "1.0.0",
-      "sha256": "5d21ce7474c185fd8e21db6933bd242a481764e1d4d5f3ffb5b454a537d2b7f0",
+      "sha256": "a3eb8c02b1b07a9f661319582f73914784172db972b50a25444d584f3ec7f06f",
       "subject_to_regazette": true
     },
     "rp-vat-exempt-basket": {
