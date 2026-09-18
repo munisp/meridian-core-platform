@@ -34,8 +34,14 @@ pip install -e packages/events/python
 cd services/rules-engine && pytest tests/   # (same for feature-store, reg-watch, settlement)
 ```
 
-Go workspace: `go.work` at repo root (`go 1.23`, per-module `replace` for
-local packages). Only third-party Go dep: `gopkg.in/yaml.v3`.
+Go workspace: `go.work` at repo root (`go 1.25.0`). Third-party Go deps
+include `gopkg.in/yaml.v3`, `github.com/twmb/franz-go` (Kafka),
+`github.com/jackc/pgx/v5` (Postgres), `github.com/tigerbeetle/tigerbeetle-go`
+(ledger), the OpenTelemetry SDK and `github.com/golang-jwt/jwt/v5`.
+
+CI: the GitHub workflow lives in `ci/workflows/ci.yml` (automation cannot
+push `.github/workflows/*`); to activate it on GitHub, copy it into
+`.github/workflows/` manually — see `ci/README.md`.
 
 ## Run (dev, zero external deps)
 
