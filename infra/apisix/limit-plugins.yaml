@@ -24,6 +24,14 @@ default_route_plugins:
       X-Load-Class: standard
 
 # Route-specific overrides.
+#
+# HONEST STATUS (R4, S2 finding #14): the filings-post, payments-post,
+# otp-request and batch-export classes guard URIs with NO backend service
+# in any repo today (filing-api/payments-api are disabled phantoms in
+# values-prod.yaml; no OTP or exports service exists). They are STAGED
+# policy — edge-policy's limitClassRules only attach to routes present in
+# the route table, so nothing below search-autocomplete is enforced yet.
+# They activate automatically once the corresponding services/routes land.
 routes:
   # Filing endpoints: 20 r/s per TIN (SPEC B section 3).
   - name: filings-post

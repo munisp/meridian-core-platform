@@ -1,6 +1,6 @@
 # ci/ — dual-path CI mirror (HARDENING H6)
 
-`ci/workflows/ci.yml` is a byte-identical copy of `.github/workflows/ci.yml`.
+`ci/workflows/ci.yml` is the canonical workflow. `.github/workflows/ci.yml` does NOT exist in the repo (automation may not push workflow files); activate CI by copying this file there manually (step below).
 
 H6 push rule: attempt the push to `.github/workflows/ci.yml` first; if the
 GitHub API rejects it with a workflow-scope error (403/422 — the token lacks
