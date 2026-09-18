@@ -2,7 +2,7 @@
 signature contract (meridian-ceremony-canonical-yaml/v1) — ed25519 over the
 canonical YAML bytes the governance ceremony signs
 (meridian-rule-packs tools/rpcommon.canonical_bytes, key_id
-governance-board-2026), not a JSON form and not a sha256 digest.
+governance-board-2026-r2), not a JSON form and not a sha256 digest.
 
 Fixture: rp-fmt-fct 1.0.0 copied byte-for-byte from munisp/meridian-rule-packs
 (packs/rp-fmt-fct/1.0.0.yaml @ main), with its real ceremony signature.
@@ -75,8 +75,8 @@ rules:
     narrate: FCT informal operators use rp-presumptive-federal band amounts.
 signed:
   algorithm: ed25519
-  key_id: governance-board-2026
-  signature: bb642bcea69318273698ad247160c3701c76efd54065e7552c11463ee6d578cda7c7611b2b911b53949957a898e8d3630d740325d65cc0905e05663759a2e906
+  key_id: governance-board-2026-r2
+  signature: b011a0ada6e8f2dd7d16208bcc9cc95dfc8506590caa1773add1d6d9658f822135d4013551e39af13cd5eb1bd191d9f9c73009b9fefc5e003b16d9b7eff35a08
 """
 
 
@@ -96,7 +96,7 @@ def test_real_ceremony_pack_verifies(packs_dir):
     (packs_dir / "1.0.0.yaml").write_text(REAL_PACK_YAML)
     pack = _loader(packs_dir).get("rp-fmt-fct", "1.0.0")
     assert pack["id"] == "rp-fmt-fct"
-    assert pack["signed"]["key_id"] == "governance-board-2026"
+    assert pack["signed"]["key_id"] == "governance-board-2026-r2"
 
 
 def test_canonical_bytes_match_ceremony_form(packs_dir):
@@ -121,7 +121,7 @@ def test_tampered_pack_rejected(packs_dir):
 
 
 def test_wrong_key_id_rejected(packs_dir):
-    swapped = REAL_PACK_YAML.replace("key_id: governance-board-2026",
+    swapped = REAL_PACK_YAML.replace("key_id: governance-board-2026-r2",
                                      "key_id: governance-board-1999", 1)
     (packs_dir / "1.0.0.yaml").write_text(swapped)
     with pytest.raises(PackIntegrityError, match="unknown signing key_id"):
