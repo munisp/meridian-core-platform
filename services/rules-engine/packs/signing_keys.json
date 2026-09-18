@@ -1,5 +1,11 @@
 {
   "keys": {
+    "governance-board-2026": {
+      "algorithm": "ed25519",
+      "public_key_hex": "b2ff472e90baec10063060f374780f5e6df0c295a421af74d28b2e276f98c529",
+      "trust": "canonical",
+      "note": "Canonical governance key: signs every published pack in munisp/meridian-rule-packs (tools/keys/governance-board-2026.ed25519.public). Pinned here so the verifying loader accepts canonical signed packs; without this pin every canonical pack was rejected as 'unknown signing key_id' (R4 trust-root break). The former dev private key for this key_id was committed by mistake and is BURNED (removed from meridian-rule-packs); rotate to a new key_id at the next ceremony."
+    },
     "meridian-ceremony-dev-001": {
       "algorithm": "ed25519",
       "public_key_hex": "2c134662ef09e22de4287acb5cbf1310b00bc46b46a72106378bef6c9fd635db",
