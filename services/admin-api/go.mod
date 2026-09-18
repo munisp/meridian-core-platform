@@ -6,11 +6,14 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/munisp/meridian-core-platform/packages/events v0.0.0-20260814132551-c31c8e93fdce
 	github.com/munisp/meridian-core-platform/packages/permify-models v0.0.0
+	github.com/munisp/meridian-core-platform/packages/stepup v0.0.0
 	github.com/munisp/meridian-core-platform/packages/temporal-sdkx v0.0.0
 	github.com/munisp/meridian-core-platform/workflows-go v0.0.0
 )
 
 replace github.com/munisp/meridian-core-platform/packages/permify-models => ../../packages/permify-models
+
+replace github.com/munisp/meridian-core-platform/packages/stepup => ../../packages/stepup
 
 replace github.com/munisp/meridian-core-platform/packages/temporal-sdkx => ../../packages/temporal-sdkx
 
