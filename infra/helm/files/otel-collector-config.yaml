@@ -23,22 +23,13 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
-  # Scrape the existing app /metrics listeners (METRICS_PORT, httpx/metrics.go)
-  # so the collector is a single aggregation point. Targets match
-  # docker-compose.prod.yml service names; override per deploy.
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: meridian-apps
-          scrape_interval: 30s
-          static_configs:
-            - targets:
-                - ledger:9460
-                - admin-api:9461
-                - consent:9462
-                - notification:9463
-                - search-indexer:9464
-                - audit-evidence:9465
+  # REMOVED (R4, S2 finding #3 / S3 #8): the static app scrape targets
+  # matched NOTHING — no application service shares the collector network
+  # (compose profiles are middleware-only; k8s app pods are scraped by the
+  # Prometheus server via the prometheus.io/* pod annotations the helm
+  # chart stamps). Application /metrics flow: app METRICS_PORT listener
+  # -> Prometheus server (prometheus.yml app jobs); OTLP-pushed app
+  # telemetry still arrives via the otlp receiver below.
 
   # Kafka/Redpanda broker + topic + consumer-group metrics (contrib).
   kafkametrics:
@@ -73,19 +64,21 @@ processors:
     timeout: 5s
     send_batch_size: 1024
 
-  # Tenant enrichment: copy the tenant.id span attribute onto the resource so
-  # per-tenant series/routing is possible downstream. Uses the transform
-  # processor (contrib). No-op when tenant.id is absent.
+  # Tenant enrichment: copy the tenant.id span attribute onto the resource
+  # so per-tenant series are possible downstream. R4 (S3 #7): ALLOWLIST the
+  # tenant value shape — after the otelx edge hardening only verified
+  # tenants arrive, this is defence in depth against cardinality bombs
+  # (unbounded tenant_id label values would OOM Prometheus).
   transform/tenant:
     error_mode: ignore
     trace_statements:
       - context: span
         statements:
-          - set(resource.attributes["tenant.id"], attributes["tenant.id"]) where attributes["tenant.id"] != nil
+          - set(resource.attributes["tenant.id"], attributes["tenant.id"]) where attributes["tenant.id"] != nil and IsMatch(attributes["tenant.id"], "^[a-z0-9][a-z0-9-]{0,62}$")
     metric_statements:
       - context: datapoint
         statements:
-          - set(resource.attributes["tenant.id"], attributes["tenant.id"]) where attributes["tenant.id"] != nil
+          - set(resource.attributes["tenant.id"], attributes["tenant.id"]) where attributes["tenant.id"] != nil and IsMatch(attributes["tenant.id"], "^[a-z0-9][a-z0-9-]{0,62}$")
 
 exporters:
   # Re-expose all metrics in Prometheus format for the existing Prometheus
@@ -94,6 +87,14 @@ exporters:
     endpoint: 0.0.0.0:9464
     resource_to_telemetry_conversion:
       enabled: true   # tenant.id / service.name become metric labels
+
+  # R4 (S2 finding #2 / S3 #8): real trace backend — Jaeger all-in-one
+  # (otlp receiver on :4317). Deployed by docker-compose.prod.yml and the
+  # helm chart (observability.jaeger). debug stays as a sampled snoop.
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
 
   debug:
     verbosity: basic
@@ -108,11 +109,13 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, transform/tenant, batch]
-      exporters: [debug]
+      exporters: [otlp/jaeger, debug]
     metrics:
-      receivers: [otlp, prometheus, kafkametrics, redis, postgresql, opensearch]
+      receivers: [otlp, kafkametrics, redis, postgresql, opensearch]
       processors: [memory_limiter, transform/tenant, batch]
       exporters: [prometheus, debug]
+    # HONEST (R4): no log backend is provisioned — logs stay on the sampled
+    # debug exporter until a Loki/Elasticsearch pipeline is deployed.
     logs:
       receivers: [otlp]
       processors: [memory_limiter, batch]

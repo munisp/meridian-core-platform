@@ -1,131 +1,169 @@
-# Meridian core platform — full local stack (SPEC 2 infra).
-# Services themselves run dev-standalone; this compose brings up the rails.
-name: meridian-core
+# Full local stack: every external dependency for the core platform.
+# Everything else (inproc bus, embedded stores, dev auth, inproc temporal
+# runner, local WORM dir, local index) keeps working when this file is NOT
+# running; this compose upgrades dev to the real rails.
+#
+# Usage:  docker compose -f infra/docker-compose.full.yml up -d
+# Env:    source infra/.env.example (dev defaults match these services)
+name: meridian-full
+
 services:
+  # ---------------------------------------------------------------- bus
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:v24.1.7
-    command: ["redpanda", "start", "--mode=dev-container", "--smp=1", "--memory=1G",
-              "--kafka-addr=PLAINTEXT://0.0.0.0:9092", "--advertise-kafka-addr=PLAINTEXT://localhost:9092",
-              "--pandaproxy-addr=0.0.0.0:8082", "--advertise-pandaproxy-addr=localhost:8082"]
-    ports: ["9092:9092", "8082:8082", "9644:9644"]
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.4
+    command:
+      - redpanda start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr=internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr=internal://redpanda:8082,external://localhost:18082
+    ports: ["19092:19092", "18082:18082", "9644:9644"]
+
+  # ---------------------------------------------------------------- identity
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports: ["8085:8080"]
+
+  permify:
+    image: ghcr.io/permify/permify:v0.9.7
+    command: serve
+    environment:
+      PERMIFY_DATABASE_ENGINE: memory
+    ports: ["3476:3476", "3478:3478"]
+    volumes:
+      - ../../packages/permify-models/schemas:/etc/permify/schemas:ro
+
+  # ---------------------------------------------------------------- gateway
+  apisix:
+    image: apache/apisix:3.9.1-debian
+    environment:
+      APISIX_STAND_ALONE: "true"
+    ports: ["9080:9080", "9180:9180"]
+    volumes:
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+    depends_on: [keycloak]
+
+  # ---------------------------------------------------------------- workflow
   temporal:
     image: temporalio/auto-setup:1.24.2
     environment:
-      - DB=postgresql
-      - DB_PORT=5432
-      - POSTGRES_USER=meridian
-      - POSTGRES_PWD=meridian
-      - POSTGRES_SEEDS=postgres
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: meridian
+      POSTGRES_PWD: meridian
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
     ports: ["7233:7233"]
+    volumes:
+      - ./temporal/dynamicconfig:/etc/temporal/config/dynamicconfig
     depends_on: [postgres]
+
   temporal-ui:
-    image: temporalio/ui:2.28.0
-    environment: [TEMPORAL_ADDRESS=temporal:7233]
-    ports: ["8080:8080"]
+    image: temporalio/ui:2.27.1
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports: ["8088:8080"]
     depends_on: [temporal]
+
+  # ---------------------------------------------------------------- data
   postgres:
     image: postgis/postgis:16-3.4
     environment:
-      - POSTGRES_USER=meridian
-      - POSTGRES_PASSWORD=meridian
-      - POSTGRES_DB=meridian
+      POSTGRES_USER: meridian
+      POSTGRES_PASSWORD: meridian
+      POSTGRES_DB: meridian
     ports: ["5432:5432"]
-    volumes: [pgdata:/var/lib/postgresql/data]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../migrations/postgres/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+
   redis:
-    image: redis:7-alpine
+    image: redis:7.2
     ports: ["6379:6379"]
+
   opensearch:
-    image: opensearchproject/opensearch:2.13.0
+    image: opensearchproject/opensearch:2.14.0
     environment:
-      - discovery.type=single-node
-      - DISABLE_SECURITY_PLUGIN=true
-      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      discovery.type: single-node
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: Meridian-admin-1
+      plugins.security.disabled: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
     ports: ["9200:9200"]
-  minio:
-    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
-    command: server /data --console-address ":9001"
-    environment: [MINIO_ROOT_USER=meridian, MINIO_ROOT_PASSWORD=meridian123]
-    ports: ["9000:9000", "9001:9001"]
+
   tigerbeetle:
     image: ghcr.io/tigerbeetle/tigerbeetle:0.16.4
-    command: ["start", "--addresses=0.0.0.0:3000", "--development", "/data/cluster.tigerbeetle"]
+    command:
+      - start
+      - --addresses=0.0.0.0:3000
+      - --development
+      - /data/0_0.tigerbeetle
     ports: ["3000:3000"]
-    volumes: [tbdata:/data]
-  keycloak:
-    image: quay.io/keycloak/keycloak:25.0
-    command: start-dev
-    environment: [KEYCLOAK_ADMIN=admin, KEYCLOAK_ADMIN_PASSWORD=admin]
-    ports: ["8085:8080"]
-  permify:
-    image: ghcr.io/permify/permify:v1.0.0
-    command: serve
-    ports: ["3476:3476", "3478:3478"]
-  apisix:
-    image: apache/apisix:3.9.0-debian
-    environment: [APISIX_STAND_ALONE=true]
-    ports: ["9080:9080", "9180:9180"]
-    depends_on: [etcd]
-  etcd:
-    image: bitnami/etcd:3.5
-    environment: [ALLOW_NONE_AUTHENTICATION=yes]
-    ports: ["2379:2379"]
-
-  # ---- otel-foundation wave: collector + alertmanager -------------------
-  # Receives OTLP (4317 grpc / 4318 http), re-exports Prometheus on :9464.
-  # Config: observability/otel-collector-config.yaml. Set OTELCOL_PG_PASSWORD.
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.111.0
-    command: ["--config=/etc/otelcol-contrib/config.yaml"]
-    environment:
-      - OTELCOL_PG_PASSWORD=${OTELCOL_PG_PASSWORD:-meridian}
     volumes:
-      - ./observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
-    ports: ["4317:4317", "4318:4318", "9464:9464", "8888:8888"]
-    depends_on: [redpanda, redis, postgres, opensearch]
+      - tbdata:/data
+
+  # ---------------------------------------------------------------- observability
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    ports: ["9090:9090"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+
+  # R4 (S2 finding #2): real trace backend — Jaeger all-in-one. The
+  # collector exports spans via otlp/jaeger (see otel-collector-config.yaml).
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports: ["16686:16686", "14317:4317", "14318:4318"]
 
   # Config contains ${ENV} placeholders: render with envsubst into
   # observability/.alertmanager.rendered.yml before starting (see file header).
   alertmanager:
     image: prom/alertmanager:v0.27.0
-    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    ports: ["9093:9093"]
     volumes:
       - ./observability/.alertmanager.rendered.yml:/etc/alertmanager/alertmanager.yml:ro
-    ports: ["9093:9093"]
 
-
-  # ---- otel-foundation wave: provisioned middleware (NOT active by default
-  # where profile-gated; see docs/integrations/<name>.md) -------------------
-  dapr-placement:
-    image: daprio/placement:1.14
-    profiles: ["dapr"]            # opt-in: Dapr control plane not installed
-    ports: ["50005:50005"]
-
-  mojaloop-simulator:             # SIM only — no live scheme adapter (docs)
-    image: mojaloop/simulator:v12.0.0
-    profiles: ["interop"]
-    environment: [SIM_PROFILE=merchant-payment]
-    ports: ["8444:8444"]
-
-  opensearch-dashboards:          # companion UI for the existing opensearch
-    image: opensearchproject/opensearch-dashboards:2.13.0
+  # OTel collector (otel-foundation wave): single OTLP intake + middleware
+  # receivers (kafkametrics/redis/postgresql/opensearch) re-exported to
+  # Prometheus. Config: infra/observability/otel-collector-config.yaml.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
     environment:
-      - OPENSEARCH_HOSTS=http://opensearch:9200
-      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
-    ports: ["5601:5601"]
-    depends_on: [opensearch]
-
-  openappsec-agent:               # WAF agent; APISIX plugin NOT enabled yet
-    image: ghcr.io/openappsec/agent:latest
-    profiles: ["security"]
-    environment: [AGENT_MODE=local]
-
-  geolibre:                       # placeholder image — docs/integrations/geolibre.md
-    image: geolibre/server:latest
-    profiles: ["geo-maps"]
-    environment:
-      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
-    ports: ["8088:8080"]
+      - OTELCOL_PG_PASSWORD=meridian
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC — point OTEL_EXPORTER_OTLP_ENDPOINT here
+      - "4318:4318"   # OTLP HTTP
+      - "9464:9464"   # Prometheus re-export (scraped by prometheus.yml)
+      - "8888:8888"   # collector self-metrics
+    depends_on: [redpanda, redis, postgres, opensearch, jaeger]
 
 volumes:
-  pgdata: {}
-  tbdata: {}
+  pgdata:
+  tbdata:
