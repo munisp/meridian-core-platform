@@ -1,23 +1,69 @@
+# [seed] rp-vat-exempt-basket — VAT-exempt supplies (First Schedule, VAT Act).
+# Exempt supplies carry NO output VAT and input VAT is not recoverable.
 id: rp-vat-exempt-basket
 version: 1.0.0
-title: VAT exempt basket (goods and services)
-rules:
-- id: vat.exempt.shared-transport
-  when:
-    category: shared_passenger_transport
-  then:
-    decision: exempt
-- id: vat.exempt.real-property
-  when:
-    category: real_property
-  then:
-    decision: exempt
-- id: vat.exempt.money-securities
-  when:
-    category: money_securities
-  then:
-    decision: exempt
+effective_from: 2020-02-01
+effective_to: null
+status: published
+subject_to_regazette: true
+provenance:
+  as_passed: VAT Act Cap V1 LFN 2004 (as amended), First Schedule, as passed
+  as_gazetted: null
+  source_citation: VAT Act, First Schedule (exempt goods and services); Finance Act 2020/2021 amendments
 signed:
   algorithm: ed25519
   key_id: governance-board-2026-r2
-  signature: 6484880eceecccf8413c64b93cc9d3ff2c897d8a996176743fa336aa97dcb0d78a3bd450a0a23a28d38b5e2503f9f22eb1fd8a2b0ee4c0b981808879f7dc0805
+  signature: 0f78ca2c341df219b46f04d9eebf20ba8c66f5d65794eb64f2cca3140913ab616cae312093039fde95f4093cc006857c8db37865a71488d08c52036173ec260a
+rules:
+- id: vat.exempt.medical-services
+  when:
+    category:
+    - medical_services
+    - healthcare_services
+  then:
+    decision: exempt
+    rate_bps: 0
+    narrate: 'VAT exempt: medical and health care services'
+- id: vat.exempt.education-services
+  when:
+    category:
+    - education_services
+    - tuition
+  then:
+    decision: exempt
+    rate_bps: 0
+    narrate: 'VAT exempt: educational services / tuition'
+- id: vat.exempt.exported-services
+  when:
+    category: exported_services
+  then:
+    decision: exempt
+    rate_bps: 0
+    narrate: 'VAT exempt: exported services'
+- id: vat.exempt.plays-performances
+  when:
+    category:
+    - cultural_performances
+    - school_plays
+  then:
+    decision: exempt
+    rate_bps: 0
+    narrate: 'VAT exempt: plays and performances conducted by educational institutions'
+- id: vat.exempt.real-estate-land
+  when:
+    category:
+    - land_sale
+    - real_estate_lease
+  then:
+    decision: exempt
+    rate_bps: 0
+    narrate: 'VAT exempt: sale/lease of land and residential accommodation'
+- id: vat.exempt.financial-securities
+  when:
+    category:
+    - money_securities
+    - shares_stocks
+  then:
+    decision: exempt
+    rate_bps: 0
+    narrate: 'VAT exempt: money, securities and shares transactions'

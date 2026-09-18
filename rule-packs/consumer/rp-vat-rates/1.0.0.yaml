@@ -3,8 +3,7 @@
 id: rp-vat-rates
 version: 1.0.0
 title: VAT rate table (standard 7.5%) with effective dates
-description: 'VAT rates: standard 7.5% (from 1 Feb 2020), zero-rated and exempt classes referenced to basket packs; rate history
-  retained for back-period computations.'
+description: 'VAT rates: standard 7.5% (from 1 Feb 2020), zero-rated and exempt classes referenced to basket packs; rate history retained for back-period computations.'
 effective_from: '2020-02-01'
 effective_to: null
 status: published
@@ -58,9 +57,7 @@ rules:
     threshold:
       annual_taxable_supplies_kobo:
         gt: 10000000000
-    narrate: NTA registration threshold N100m taxable supplies, applied gt — NTAA 2025 s.147 defines a small business as gross
-      turnover of "N100,000,000 or less", so turnover of EXACTLY N100m is still exempt and registration triggers only ABOVE
-      N100m. Consistent with rp-exemption-nta exempt.small-company (lte N100m exempt) and rp-turnover-bands band.exit.register.
+    narrate: NTA registration threshold N100m taxable supplies, applied gt — NTAA 2025 s.147 defines a small business as gross turnover of "N100,000,000 or less", so turnover of EXACTLY N100m is still exempt and registration triggers only ABOVE N100m. Consistent with rp-exemption-nta exempt.small-company (lte N100m exempt) and rp-turnover-bands band.exit.register.
   effective_from: '2026-01-01'
   citation: 'NTAA 2025, s.147 (Forvis Mazars: "annual turnover of N100 million or less")'
 - id: vat.registration.threshold-legacy
