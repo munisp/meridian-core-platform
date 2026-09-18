@@ -1,16 +1,26 @@
 {
   "keys": {
-    "governance-board-2026": {
+    "governance-board-2026-r2": {
       "algorithm": "ed25519",
-      "public_key_hex": "b2ff472e90baec10063060f374780f5e6df0c295a421af74d28b2e276f98c529",
+      "public_key_hex": "9f7c6f51a6e0597bd20266afbe94edddfc7b079c7dd20b6a9748cb73977df88a",
       "trust": "canonical",
-      "note": "Canonical governance key: signs every published pack in munisp/meridian-rule-packs (tools/keys/governance-board-2026.ed25519.public). Signatures are ed25519 over the ceremony canonical YAML bytes (meridian-ceremony-canonical-yaml/v1). The former dev private key for this key_id was committed by mistake and is BURNED (removed from meridian-rule-packs); rotate to a new key_id at the next ceremony."
+      "note": "Canonical governance key (R4-9a rotation, 2026-09-18): signs every published pack in munisp/meridian-rule-packs (tools/keys/governance-board-2026-r2.ed25519.public). Signatures are ed25519 over the ceremony canonical YAML bytes (meridian-ceremony-canonical-yaml/v1). Private key held in secrets-vault custody (delivered out-of-band); never committed."
     },
     "meridian-ceremony-dev-002": {
       "algorithm": "ed25519",
-      "public_key_hex": "9579a5ccca7515aced0fa712a0e63c20cb999848145e11454e763fa304170e90",
-      "trust": "seed-dev",
-      "note": "[seed] dev key for core's vendored sample packs, re-signed under the ceremony canonical-YAML contract (R4 contract bridge; supersedes meridian-ceremony-dev-001 whose JSON-digest signatures are retired). Private key discarded after one-shot re-signing; prod keys are held by the offline ceremony and distributed out-of-band."
+      "public_key_hex": "dd84b74a6d5676101f01f1974fa7a4e30f27638d8c21a5b90f7e3e75e044c8f1",
+      "trust": "dev",
+      "note": "Local dev key for core's vendored sample packs, re-signed under the ceremony canonical-YAML contract. The dev private key is intentionally not committed (regenerate per GOVERNANCE.md); historical packs whose canonical bytes still verify under this key remain acceptable in dev mode only."
+    }
+  },
+  "revoked_keys": {
+    "governance-board-2026": {
+      "algorithm": "ed25519",
+      "public_key_hex": "b2ff472e90baec10063060f374780f5e6df0c295a421af74d28b2e276f98c529",
+      "status": "REVOKED",
+      "revoked_at": "2026-09-18T19:55:00Z",
+      "replaced_by": "governance-board-2026-r2",
+      "note": "BURNED: the dev private key for this key_id was committed to meridian-rule-packs by mistake and remains in public git history (history cannot be rewritten). NOT trusted for verification: signatures from this key_id FAIL CLOSED. POLICY: treat any signature from governance-board-2026 created after 2026-09-18T19:55:00Z as invalid. Public key retained here for historical reference only."
     }
   }
 }

@@ -1,72 +1,23 @@
-# [seed] rp-vat-zerorated-basket — zero-rated supplies (Second Schedule, VAT Act).
-# Zero-rated supplies charge 0% output VAT and input VAT REMAINS recoverable.
 id: rp-vat-zerorated-basket
 version: 1.0.0
-effective_from: 2020-02-01
-effective_to: null
-status: published
-subject_to_regazette: true
-provenance:
-  as_passed: VAT Act Cap V1 LFN 2004 (as amended), Second Schedule, as passed
-  as_gazetted: null
-  source_citation: VAT Act, Second Schedule (zero-rated goods and services); Finance Act 2020 amendments
-signed:
-  algorithm: ed25519
-  key_id: meridian-ceremony-dev-002
-  signature: d6aff62dc337a2d0c4374fa2fb0dbc944e6798016715057188329800c76e1c58e04856914ebeaefba6cc01ea72e2c4e803fa9aba56130d85ec163aa694512e03
+title: VAT zero-rated basket (goods and services)
 rules:
-- id: vat.zero.non-oil-exports
-  when:
-    category:
-    - non_oil_exports
-    - exported_goods
-  then:
-    decision: zero_rated
-    rate_bps: 0
-    narrate: 'Zero-rated: non-oil exports'
 - id: vat.zero.basic-food
   when:
-    category:
-    - basic_food
-    - basic_food_items
+    category: basic_food
   then:
-    decision: zero_rated
     rate_bps: 0
-    narrate: 'Zero-rated: basic food items (Finance Act 2020)'
-- id: vat.zero.medical-pharma
+- id: vat.zero.medical
   when:
-    category:
-    - medical_products
-    - pharmaceuticals
+    category: medical
   then:
-    decision: zero_rated
     rate_bps: 0
-    narrate: 'Zero-rated: medical and pharmaceutical products'
-- id: vat.zero.educational-books
+- id: vat.zero.exports
   when:
-    category:
-    - educational_books
-    - educational_materials
+    category: exports
   then:
-    decision: zero_rated
     rate_bps: 0
-    narrate: 'Zero-rated: books and educational materials'
-- id: vat.zero.plant-machinery-export-processing
-  when:
-    category:
-    - plant_machinery_export_zone
-    - gas_exploration_inputs
-  then:
-    decision: zero_rated
-    rate_bps: 0
-    narrate: 'Zero-rated: plant & machinery for export-processing zones / gas utilisation'
-- id: vat.zero.commercial-aircraft
-  when:
-    category:
-    - commercial_aircraft
-    - commercial_aircraft_parts
-    - airline_transportation
-  then:
-    decision: zero_rated
-    rate_bps: 0
-    narrate: 'Zero-rated: commercial aircraft, spare parts and airline transportation'
+signed:
+  algorithm: ed25519
+  key_id: governance-board-2026-r2
+  signature: 3b09f71924d0e68d704028578ddc1b7a1b05cc7e663219d2db4fb703233f8c5bb155ff0022d25d1fdfb52b0e2d1bd7c1b9039af0b1f3381ba09a5b6e40f1610c

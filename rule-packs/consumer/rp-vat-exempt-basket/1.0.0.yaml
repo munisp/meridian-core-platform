@@ -1,69 +1,23 @@
-# [seed] rp-vat-exempt-basket — VAT-exempt supplies (First Schedule, VAT Act).
-# Exempt supplies carry NO output VAT and input VAT is not recoverable.
 id: rp-vat-exempt-basket
 version: 1.0.0
-effective_from: 2020-02-01
-effective_to: null
-status: published
-subject_to_regazette: true
-provenance:
-  as_passed: VAT Act Cap V1 LFN 2004 (as amended), First Schedule, as passed
-  as_gazetted: null
-  source_citation: VAT Act, First Schedule (exempt goods and services); Finance Act 2020/2021 amendments
+title: VAT exempt basket (goods and services)
+rules:
+- id: vat.exempt.shared-transport
+  when:
+    category: shared_passenger_transport
+  then:
+    decision: exempt
+- id: vat.exempt.real-property
+  when:
+    category: real_property
+  then:
+    decision: exempt
+- id: vat.exempt.money-securities
+  when:
+    category: money_securities
+  then:
+    decision: exempt
 signed:
   algorithm: ed25519
-  key_id: meridian-ceremony-dev-002
-  signature: 560a7e890296c2dcb5200f316aa973f8e74ffec6844b6a811ee1eeb6d7e996ae5a2ea7df6cadf30e7b4cb4d07b83e706d19b99e561d5ed8f040f4b7b3d116b0b
-rules:
-- id: vat.exempt.medical-services
-  when:
-    category:
-    - medical_services
-    - healthcare_services
-  then:
-    decision: exempt
-    rate_bps: 0
-    narrate: 'VAT exempt: medical and health care services'
-- id: vat.exempt.education-services
-  when:
-    category:
-    - education_services
-    - tuition
-  then:
-    decision: exempt
-    rate_bps: 0
-    narrate: 'VAT exempt: educational services / tuition'
-- id: vat.exempt.exported-services
-  when:
-    category: exported_services
-  then:
-    decision: exempt
-    rate_bps: 0
-    narrate: 'VAT exempt: exported services'
-- id: vat.exempt.plays-performances
-  when:
-    category:
-    - cultural_performances
-    - school_plays
-  then:
-    decision: exempt
-    rate_bps: 0
-    narrate: 'VAT exempt: plays and performances conducted by educational institutions'
-- id: vat.exempt.real-estate-land
-  when:
-    category:
-    - land_sale
-    - real_estate_lease
-  then:
-    decision: exempt
-    rate_bps: 0
-    narrate: 'VAT exempt: sale/lease of land and residential accommodation'
-- id: vat.exempt.financial-securities
-  when:
-    category:
-    - money_securities
-    - shares_stocks
-  then:
-    decision: exempt
-    rate_bps: 0
-    narrate: 'VAT exempt: money, securities and shares transactions'
+  key_id: governance-board-2026-r2
+  signature: 6484880eceecccf8413c64b93cc9d3ff2c897d8a996176743fa336aa97dcb0d78a3bd450a0a23a28d38b5e2503f9f22eb1fd8a2b0ee4c0b981808879f7dc0805
