@@ -31,7 +31,14 @@ func signedPackBody(t *testing.T, pub ed25519.PublicKey, priv ed25519.PrivateKey
 	if priv == nil {
 		return pack // unsigned variant
 	}
-	msg, err := rpschema.CanonicalSigningBytes(pack)
+	// Ceremony contract (meridian-ceremony-canonical-yaml/v1): sign the
+	// canonical YAML bytes of the body, derived from the serialized artifact
+	// exactly as the runtime verifier derives them (JSON is valid YAML).
+	raw, err := json.Marshal(pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := rpschema.CanonicalSigningBytesFromYAML(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
