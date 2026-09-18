@@ -29,7 +29,9 @@ def loader():
 
 def test_vat_standard_rate_750bps(loader):
     pack = loader.get("rp-vat-rates")
-    r = evaluate(pack, {"supply_type": "standard", "filing_date": "2024-06-01",
+    # R4 #10: canonical pack (synced from meridian-rule-packs) uses
+    # supply_class/date when-keys.
+    r = evaluate(pack, {"supply_class": "standard", "date": "2024-06-01",
                         "amount_kobo": 1_000_000_00})
     assert r["matched"] and r["decision"]["rate_bps"] == 750
     assert r["decision"]["amount_kobo"] == 75_000_00  # 7.5% of ₦1,000,000
@@ -37,7 +39,7 @@ def test_vat_standard_rate_750bps(loader):
 
 def test_vat_legacy_rate_500bps_before_finance_act(loader):
     pack = loader.get("rp-vat-rates")
-    r = evaluate(pack, {"supply_type": "standard", "filing_date": "2019-12-31",
+    r = evaluate(pack, {"supply_class": "standard", "date": "2019-12-31",
                         "amount_kobo": 1_000_000_00})
     assert r["decision"]["rate_bps"] == 500
     assert r["decision"]["amount_kobo"] == 50_000_00
