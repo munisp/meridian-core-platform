@@ -27,6 +27,13 @@ spec:
       labels:
         app.kubernetes.io/name: {{ $name }}
         app.kubernetes.io/part-of: meridian-core
+      {{- if and $.Values.platform $.Values.platform.metricsPort }}
+      annotations:
+        # Discovered by the kubernetes_sd "pods" job in prometheus.yml.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $.Values.platform.metricsPort | quote }}
+        prometheus.io/path: /metrics
+      {{- end }}
     spec:
       securityContext:
         {{- include "meridian.podSecurityContext" . | nindent 8 }}
@@ -44,6 +51,50 @@ spec:
             {{- $profile = index $svc.env "PROFILE" }}
             {{- end }}
             - {name: PROFILE, value: {{ $profile | quote }}}
+            {{- if $.Values.auth }}
+            # R4 (S2 #1): without AUTH_MODE every service fail-closed under
+            # PROFILE=prod. Only dev|keycloak are valid modes.
+            - {name: AUTH_MODE, value: {{ $.Values.auth.mode | quote }}}
+            {{- if eq $.Values.auth.mode "keycloak" }}
+            - {name: KEYCLOAK_ISSUER, value: {{ $.Values.auth.keycloakIssuer | quote }}}
+            - {name: KEYCLOAK_JWKS_URL, value: {{ ($.Values.auth.keycloakJwksUrl | default (printf "%s/protocol/openid-connect/certs" $.Values.auth.keycloakIssuer)) | quote }}}
+            - {name: KEYCLOAK_AUDIENCE, value: {{ $.Values.auth.keycloakAudience | quote }}}
+            {{- end }}
+            {{- end }}
+            {{- if $.Values.platform }}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ $.Values.platform.otelExporterOtlpEndpoint | quote }}}
+            - {name: METRICS_PORT, value: {{ $.Values.platform.metricsPort | quote }}}
+            {{- if $svc.kafkaConsumer }}
+            - {name: KAFKA_BROKERS, value: {{ $.Values.platform.kafkaBrokers | quote }}}
+            {{- end }}
+            {{- if eq $name "ledger" }}
+            - {name: TIGERBEETLE_ADDRESSES, value: {{ $.Values.platform.tigerbeetleAddresses | quote }}}
+            {{- end }}
+            {{- end }}
+            {{- if and (eq $name "geo") $.Values.secrets }}
+            - name: DATABASE_URL
+              value: {{ printf "postgres://%s:$(POSTGRES_PASSWORD)@%s:5432/geo?sslmode=disable" $.Values.secrets.values.postgresUser $.Values.secrets.values.postgresHost | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: meridian-postgres, key: password}}
+            {{- end }}
+            {{- if $.Values.secrets }}
+            {{- if eq $name "audit-evidence" }}
+            # audit-evidence log.Fatal without these (main.go:54).
+            - name: TAT_SEAL_KEY
+              valueFrom: {secretKeyRef: {name: meridian-platform, key: TAT_SEAL_KEY}}
+            - name: TAT_CHAIN_HMAC_KEY
+              valueFrom: {secretKeyRef: {name: meridian-platform, key: TAT_CHAIN_HMAC_KEY}}
+            {{- end }}
+            {{- if eq $name "consent" }}
+            # consent log.Fatal without this (main.go:126).
+            - name: CONSENT_RECEIPT_KEY
+              valueFrom: {secretKeyRef: {name: meridian-platform, key: CONSENT_RECEIPT_KEY}}
+            {{- end }}
+            {{- if eq $name "tin-graph" }}
+            - name: TIN_HMAC_KEY
+              valueFrom: {secretKeyRef: {name: meridian-platform, key: TIN_HMAC_KEY}}
+            {{- end }}
+            {{- end }}
             {{- range $ek, $ev := $svc.env }}
             {{- if ne $ek "PROFILE" }}
             - {name: {{ $ek }}, value: {{ $ev | quote }}}

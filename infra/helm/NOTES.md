@@ -26,10 +26,44 @@ decisions as notes for the platform team:
 - Temporal: visibility on Postgres, one namespace per plane.
 - OpenSearch: 3 data nodes, ISM policy for `nrs-events-*`.
 - Keycloak realm `meridian`: OIDC issuers per zone, JWKS consumed by every
-  service (`OIDC_ISSUER_URL`, AUTH_MODE=prod).
+  service (`KEYCLOAK_ISSUER` / `KEYCLOAK_JWKS_URL`, `AUTH_MODE=keycloak`).
+  NOTE (R4 fix): `dev` and `keycloak` are the ONLY valid AUTH_MODEs —
+  `AUTH_MODE=prod` is rejected fail-closed ("unsupported AUTH_MODE"),
+  so this chart injects `AUTH_MODE=keycloak` into every service pod.
 - Permify: DSL bundles from `packages/permify-models/schemas/*.perm` loaded at
   chart install time via a job.
 - APISIX: standalone config rendered by edge-policy (`GET /v1/routes`) and
   applied via Admin API on route-table change.
-- Secrets: `MERIDIAN_DEV_JWT_SECRET`, `TIN_HMAC_KEY` from ExternalSecrets;
-  dev defaults are for local only.
+- Secrets: `templates/secrets.yaml` defines `meridian-platform`
+  (TAT_SEAL_KEY / TAT_CHAIN_HMAC_KEY / CONSENT_RECEIPT_KEY / TIN_HMAC_KEY),
+  `grafana-admin`, `meridian-postgres` (default + monitoring namespaces) and
+  `temporal-db` from `.Values.secrets.values`. The shipped values are
+  OBVIOUS placeholders (`CHANGE_ME-...`) — replace via `--set
+  secrets.values.X=...`, a sealed values file, or set `secrets.create=false`
+  and provision the same names via ExternalSecrets.
+  `MERIDIAN_DEV_JWT_SECRET` dev defaults are for local only.
+
+## Production env reference (values-prod.yaml, R4)
+
+Every value injected by `templates/deployment-services.yaml`:
+
+| Value | Injected env | Consumed by |
+|---|---|---|
+| `environment` | `PROFILE` | all services (fail-closed prod gates) |
+| `auth.mode` | `AUTH_MODE` | packages/events/auth (dev\|keycloak only) |
+| `auth.keycloakIssuer` | `KEYCLOAK_ISSUER` | RS256/JWKS verifier (auth/keycloak.go) |
+| `auth.keycloakJwksUrl` | `KEYCLOAK_JWKS_URL` | defaults to `<issuer>/protocol/openid-connect/certs` |
+| `auth.keycloakAudience` | `KEYCLOAK_AUDIENCE` | aud claim check |
+| `platform.kafkaBrokers` | `KAFKA_BROKERS` | services flagged `kafkaConsumer: true` |
+| `platform.tigerbeetleAddresses` | `TIGERBEETLE_ADDRESSES` | ledger |
+| `platform.otelExporterOtlpEndpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | otelx (all services) |
+| `platform.metricsPort` | `METRICS_PORT` | httpx metrics listener (all services); pods carry `prometheus.io/scrape` annotations |
+| `secrets.values.postgres*` | `DATABASE_URL`/`POSTGRES_PASSWORD` | geo (from `meridian-postgres` Secret) |
+| `secrets.values.tatSealKey` / `tatChainHmacKey` | `TAT_SEAL_KEY` / `TAT_CHAIN_HMAC_KEY` | audit-evidence (fatal without) |
+| `secrets.values.consentReceiptKey` | `CONSENT_RECEIPT_KEY` | consent (fatal without) |
+| `secrets.values.tinHmacKey` | `TIN_HMAC_KEY` | tin-graph |
+| `secrets.values.grafanaAdmin*` | grafana admin login | grafana (`grafana-admin` Secret) |
+| `secrets.values.temporalDb*` | `POSTGRES_USER`/`POSTGRES_PWD` | temporal (`temporal-db` Secret) |
+
+Render check: `helm template meridian infra/helm -f infra/helm/values-prod.yaml`
+(and `-f values-dev.yaml`) both render cleanly.
