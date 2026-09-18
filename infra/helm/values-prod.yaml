@@ -249,6 +249,11 @@ observability:
   otelcol:
     image: otel/opentelemetry-collector-contrib:0.111.0
     replicas: 1
+  # Trace backend (R4, S2 finding #2): the collector exports traces to
+  # jaeger:4317 (otlp/jaeger exporter in files/otel-collector-config.yaml).
+  jaeger:
+    enabled: true
+    image: jaegertracing/all-in-one:1.60
 
 # otel-foundation wave middleware gates (all default OFF — provisioned only;
 # see docs/integrations/<name>.md for activation steps).
