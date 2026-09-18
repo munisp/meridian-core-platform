@@ -1,7 +1,9 @@
 # KEDA ScaledObjects (SPEC B sections 2 & 5):
 #  1. cron pre-scale 06:00 Africa/Lagos (WAT) during filing windows.
 #  2. kafka consumer lag scalers for consumer services.
-#  3. ML serving queue-depth scalers (kyc-worker; ollama is a fixed 3-replica deployment).
+#  3. ML serving queue-depth scalers (kyc-worker only — kyc-worker is
+#     enabled:false pending an implementation; the orphaned ollama block was
+#     removed in R4: no ollama workload exists in this chart).
 {{- $k := .Values.keda }}
 {{- if and $k $k.cronPreScale.enabled }}
 {{- range $k.cronPreScale.targets }}
