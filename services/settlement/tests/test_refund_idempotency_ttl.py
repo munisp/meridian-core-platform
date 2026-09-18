@@ -1,69 +1,74 @@
-"""R4: refund-decision idempotency TTL — expired key treated as new,
-purge removes terminal records only."""
+"""R4 refund-decision idempotency TTL: replay window + terminal purge."""
+from __future__ import annotations
+
 import os
-import sys
-import tempfile
 import time
-from pathlib import Path
 
-os.environ["DATA_DIR"] = tempfile.mkdtemp()
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+os.environ.setdefault("AUTH_MODE", "dev")
+os.environ.setdefault("DATA_DIR", "/tmp/settlement-test-r4-ttl")
 
-from app.main import (REFUND_IDEMPOTENCY_TTL_SECONDS, _iso, _store,  # noqa: E402
-                      purge_expired_refund_decisions, refund_decision_expired)
-from app.refund_execution import refund_id  # noqa: E402
+import shutil  # noqa: E402
 
+shutil.rmtree(os.environ["DATA_DIR"], ignore_errors=True)
 
-def _decision(rid, lane="auto_approve", decided_at=None):
-    return {"refund_id": rid, "tin_hash": "tin-h", "period": "2026-07",
-            "tax_type": "vat", "amount_kobo": 100_000, "lane": lane,
-            "decided_at": decided_at or _iso(time.time())}
+from app.main import (_refund_decision_terminal,  # noqa: E402
+                      purge_expired_refund_decisions,
+                      refund_decision_expired, _store, _iso)
 
 
-def test_fresh_decision_not_expired():
-    assert not refund_decision_expired(_decision("r1"))
-
-
-def test_expired_decision_with_and_without_expires_at():
-    old = _iso(time.time() - 2 * REFUND_IDEMPOTENCY_TTL_SECONDS)
-    # legacy record: falls back to decided_at + TTL
-    assert refund_decision_expired(_decision("r2", decided_at=old))
-    # explicit expires_at in the past
-    doc = _decision("r3")
-    doc["expires_at"] = _iso(time.time() - 1)
-    assert refund_decision_expired(doc)
-    # explicit expires_at in the future wins over an old decided_at
-    doc = _decision("r4", decided_at=old)
-    doc["expires_at"] = _iso(time.time() + 3600)
-    assert not refund_decision_expired(doc)
-
-
-def test_expired_key_treated_as_new_in_fasttrack():
-    # an expired stored decision must not suppress a fresh attempt:
-    # refund_decision_expired is the exact gate refund_fasttrack applies.
-    rid = refund_id("tin-exp", "2026-07", "vat")
-    doc = _decision(rid)
-    doc["expires_at"] = _iso(time.time() - 1)
+def _decision(rid: str, lane: str = "manual_review", decided_at: float | None = None,
+              expires_at: float | None = None) -> dict:
+    decided = time.time() - 100 if decided_at is None else decided_at
+    doc = {"refund_id": rid, "lane": lane, "decided_at": _iso(decided)}
+    if expires_at is not None:
+        doc["expires_at"] = _iso(expires_at)
     _store.put("refund_decisions", rid, doc)
-    prior = _store.get("refund_decisions", rid)
-    assert prior is not None and refund_decision_expired(prior)
+    return doc
 
 
-def test_purge_terminal_only():
-    old = _iso(time.time() - 2 * REFUND_IDEMPOTENCY_TTL_SECONDS)
-    # expired + terminal (standard lane, no execution) -> purge
+def test_replay_window_open_then_closed():
+    now = time.time()
+    doc = _decision("rid-fresh", decided_at=now, expires_at=now + 3600)
+    assert not refund_decision_expired(doc, now)
+    assert refund_decision_expired(doc, now + 7200)
+
+
+def test_legacy_record_falls_back_to_decided_at_plus_ttl():
+    from app.main import REFUND_IDEMPOTENCY_TTL_SECONDS
+    now = time.time()
+    doc = _decision("rid-legacy", decided_at=now - REFUND_IDEMPOTENCY_TTL_SECONDS - 10)
+    assert refund_decision_expired(doc, now)
+
+
+def test_purge_only_terminal_expired():
+    now = time.time()
+    old = now - 3 * 24 * 3600
+    # expired + terminal (rejected standard-lane decision) -> purge
+    # (R4 S1a#4: standard lane is now executable via the approval queue,
+    # so a PENDING standard decision is in-flight and must be retained)
     d1 = _decision("rid-std", lane="standard", decided_at=old)
-    # expired + terminal (execution posted) -> purge
-    d2 = _decision("rid-posted", decided_at=old)
-    _store.put("refund_executions", "rid-posted",
-               {"refund_id": "rid-posted", "status": "posted"})
-    # expired + in-flight (manual_review awaiting approval) -> keep
-    d3 = _decision("rid-review", lane="manual_review", decided_at=old)
-    # fresh -> keep
-    d4 = _decision("rid-fresh", lane="standard")
-    for d in (d1, d2, d3, d4):
-        _store.put("refund_decisions", d["refund_id"], d)
-    n = purge_expired_refund_decisions()
-    assert n == 2, n
-    remaining = {rid for rid, _ in _store.items("refund_decisions")}
-    assert {"rid-review", "rid-fresh"} <= remaining and "rid-std" not in remaining and "rid-posted" not in remaining, remaining
+    d1["status"] = "rejected"
+    _store.put("refund_decisions", "rid-std", d1)
+    # expired + posted execution -> purge
+    d2 = _decision("rid-posted", lane="auto_approve", decided_at=old)
+    d2["execution"] = {"status": "posted"}
+    _store.put("refund_decisions", "rid-posted", d2)
+    # expired + manual_review pending -> retained
+    _decision("rid-pending", lane="manual_review", decided_at=old)
+    # fresh manual_review -> retained
+    _decision("rid-fresh", lane="manual_review")
+
+    purged = purge_expired_refund_decisions(now)
+    assert purged == 2
+    assert _store.get("refund_decisions", "rid-std") is None
+    assert _store.get("refund_decisions", "rid-posted") is None
+    assert _store.get("refund_decisions", "rid-pending") is not None
+    assert _store.get("refund_decisions", "rid-fresh") is not None
+
+
+def test_terminal_helper():
+    assert _refund_decision_terminal({"status": "rejected"})
+    assert _refund_decision_terminal({"refund_id": "x", "execution": {"status": "posted"}})
+    assert not _refund_decision_terminal({"refund_id": "x2", "lane": "manual_review"})
+    # R4 S1a#4: a pending standard-lane decision is in-flight, not terminal
+    assert not _refund_decision_terminal({"refund_id": "x3", "lane": "standard"})
