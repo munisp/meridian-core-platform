@@ -5,6 +5,63 @@
 # preStop sleep 15s + terminationGracePeriodSeconds 45 for in-flight requests.
 environment: prod
 
+# ---------------------------------------------------------------------------
+# R4 fix (S2 finding #1, CRITICAL): the chart previously injected ONLY
+# PROFILE=prod, so every service fail-closed on auth (AUTH_MODE unset) and
+# audit-evidence/consent/tin-graph crashlooped on missing mandatory keys.
+# The blocks below provision the full prod env surface. Every value is
+# documented in NOTES.md ("Production env reference").
+# ---------------------------------------------------------------------------
+
+# Auth: only dev|keycloak are valid AUTH_MODEs (packages/events/auth).
+# Prod MUST use keycloak; the HS256 dev path fails closed under PROFILE=prod.
+auth:
+  mode: keycloak
+  keycloakIssuer: https://keycloak.meridian.svc.cluster.local/realms/meridian
+  # Defaults to <issuer>/protocol/openid-connect/certs when empty.
+  keycloakJwksUrl: ""
+  keycloakAudience: meridian-services
+
+# Shared platform wiring injected into every application pod.
+platform:
+  # Redpanda/Kafka brokers (consumed by packages/events bus consumers).
+  kafkaBrokers: redpanda.kafka.svc.cluster.local:9092
+  # TigerBeetle cluster for the ledger service.
+  tigerbeetleAddresses: tigerbeetle.data.svc.cluster.local:3000
+  # OTLP endpoint for traces/metrics (otel-collector in the monitoring
+  # namespace, deployed by templates/observability.yaml).
+  otelExporterOtlpEndpoint: http://otel-collector.monitoring.svc.cluster.local:4317
+  # Dedicated per-pod metrics listener (packages/events/httpx metrics.go:
+  # without METRICS_PORT no /metrics exists at all). Same port on every pod
+  # is fine (pod network namespaces); Prometheus discovers pods via the
+  # prometheus.io/* pod annotations rendered on each Deployment.
+  metricsPort: 9460
+
+# Secrets the chart defines (templates/secrets.yaml). Placeholders are
+# OBVIOUS non-values — pods boot, but operators MUST replace them via
+# `--set secrets.values.X=...`, a sealed-values file, or ExternalSecrets
+# (set secrets.create=false and pre-create the same Secret names).
+secrets:
+  create: true
+  values:
+    # audit-evidence: TAT seal + chain HMAC keys (service log.Fatal without).
+    tatSealKey: "CHANGE_ME-tat-seal-key"
+    tatChainHmacKey: "CHANGE_ME-tat-chain-hmac-key"
+    # consent: receipt-signing key (service log.Fatal without).
+    consentReceiptKey: "CHANGE_ME-consent-receipt-key"
+    # tin-graph: TIN pseudonymisation HMAC key (required in prod).
+    tinHmacKey: "CHANGE_ME-tin-hmac-key"
+    # grafana-admin credentials.
+    grafanaAdminUser: admin
+    grafanaAdminPassword: "CHANGE_ME-grafana-admin-password"
+    # meridian-postgres: app DB user/password (+ geo DATABASE_URL host below).
+    postgresUser: meridian
+    postgresPassword: "CHANGE_ME-postgres-password"
+    postgresHost: postgres.data.svc.cluster.local
+    # temporal-db: temporal server DB credentials.
+    temporalDbUser: temporal
+    temporalDbPassword: "CHANGE_ME-temporal-db-password"
+
 global:
   imagePullPolicy: IfNotPresent
   # Default image coordinates for application services (deployment-services.yaml).
@@ -150,7 +207,7 @@ keda:
     maxLagAlert: 50000   # SPEC B: max lag alert 50k
     brokers: redpanda.kafka.svc.cluster.local:9092
   # ML serving scalers (SPEC B section 5): Temporal task-queue backlog /
-  # Redis list length for kyc workers; ollama fixed at 3 replicas.
+  # Redis list length for kyc workers.
   ml:
     kycWorker:
       scaler: redis
@@ -159,11 +216,10 @@ keda:
       address: redis-master.data.svc.cluster.local:6379
       minReplicas: 2
       maxReplicas: 20
-    ollama:
-      replicaCount: 3
-      env:
-        OLLAMA_NUM_PARALLEL: "4"
-        OLLAMA_KEEP_ALIVE: 10m
+    # REMOVED (R4, S2 finding #6): the orphaned keda.ml.ollama block. No
+    # ollama Deployment/Service exists in any template or compose file and
+    # no template consumed these values — they were dead config. Re-add a
+    # real ollama workload before restoring scaler values for it.
 
 # Stateful middleware workloads (B6/D3): consumed by deployment-tigerbeetle.yaml
 # and deployment-temporal-worker.yaml. Health probes are defined in the
@@ -190,6 +246,9 @@ observability:
     image: prom/alertmanager:v0.27.0
   grafana:
     image: grafana/grafana:11.0.0
+  otelcol:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    replicas: 1
 
 # otel-foundation wave middleware gates (all default OFF — provisioned only;
 # see docs/integrations/<name>.md for activation steps).
