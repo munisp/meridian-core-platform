@@ -87,6 +87,44 @@ func (a *app) handleMe(w http.ResponseWriter, r *http.Request) {
 
 // ---------- overview (SPEC §2) ----------
 
+// liveTransferCount returns the ledger transfer count, cached for
+// overviewTTL so repeat overview reads don't each fetch the full transfer
+// list. Prefers the lightweight GET /v1/transfers/count endpoint; ledgers
+// without it (older versions) fall back to counting the full list — still
+// cached, so the expensive fetch happens at most once per TTL.
+func (a *app) liveTransferCount() (int, string, bool) {
+	a.transferMu.Lock()
+	defer a.transferMu.Unlock()
+	if a.transferSrc != "" && time.Since(a.transferAt) < overviewTTL() {
+		if a.transferSrc == "unavailable" {
+			return 0, "", false
+		}
+		return a.transferCount, a.transferSrc, true
+	}
+	base, ok := a.serviceURL("ledger")
+	if !ok {
+		return 0, "", false
+	}
+	var cnt struct {
+		Count int `json:"count"`
+	}
+	if err := fetchJSON(a.client, base+"/v1/transfers/count", &cnt); err == nil {
+		a.transferCount, a.transferSrc, a.transferAt = cnt.Count, "live", time.Now()
+		return cnt.Count, "live", true
+	}
+	var resp struct {
+		Transfers []map[string]any `json:"transfers"`
+	}
+	if err := fetchJSON(a.client, base+"/v1/transfers", &resp); err == nil {
+		a.transferCount, a.transferSrc, a.transferAt = len(resp.Transfers), "live", time.Now()
+		return len(resp.Transfers), "live", true
+	}
+	// Negative-cache briefly so a down ledger doesn't add 1.2 s of timeout
+	// to every overview read within the TTL.
+	a.transferSrc, a.transferAt = "unavailable", time.Now()
+	return 0, "", false
+}
+
 func (a *app) handleOverview(w http.ResponseWriter, r *http.Request) {
 	packs, packsSource := a.packsView()
 	a.store.mu.Lock()
@@ -106,14 +144,9 @@ func (a *app) handleOverview(w http.ResponseWriter, r *http.Request) {
 	// pre-fix a successful GET /v1/accounts flipped the label while the
 	// number still came from the seeded admin store.
 	transferSource := "dev-seed"
-	if base, ok := a.serviceURL("ledger"); ok {
-		var resp struct {
-			Transfers []map[string]any `json:"transfers"`
-		}
-		if err := fetchJSON(a.client, base+"/v1/transfers", &resp); err == nil {
-			transfers = len(resp.Transfers)
-			transferSource = "live"
-		}
+	if n, src, ok := a.liveTransferCount(); ok {
+		transfers = n
+		transferSource = src
 	}
 
 	healthy, total := 0, 0
