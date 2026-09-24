@@ -178,6 +178,9 @@ type LedgerClient interface {
 	GetTransfer(id ID) (Transfer, Result, error)
 	ListAccounts() ([]Account, error)
 	ListTransfers(accountID ID) ([]Transfer, error)
+	// CountTransfers returns the total number of transfers without
+	// serializing them (cheap overview/count probes; O(1) on DevClient).
+	CountTransfers() (int, error)
 }
 
 // DevClient is the durable dev implementation of TigerBeetle semantics.
@@ -188,6 +191,13 @@ type DevClient struct {
 	nextSer   map[uint64]uint64 // per-namespace serial allocator
 	onChange  func()            // persistence hook (atomic snapshot)
 	onEvent   func(t Transfer)  // event hook (outbox emission)
+	// pendingChange/pendingEvents buffer hook invocations recorded while
+	// c.mu is held; runHooks drains them AFTER the mutex is released.
+	// (Perf fix: the previous design invoked the hooks inside the critical
+	// section; srv.persist -> Snapshot re-locks c.mu, which self-deadlocked
+	// the dev ledger on the very first write.)
+	pendingChange bool
+	pendingEvents []Transfer
 }
 
 // NewDevClient creates an empty dev client.
@@ -201,6 +211,8 @@ func NewDevClient() *DevClient {
 
 // SetHooks wires persistence and event hooks.
 func (c *DevClient) SetHooks(onChange func(), onEvent func(t Transfer)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.onChange = onChange
 	c.onEvent = onEvent
 }
@@ -254,6 +266,7 @@ func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 // CreateAccounts creates accounts; per-account results align by index.
 func (c *DevClient) CreateAccounts(accts []Account) ([]Result, error) {
 	c.mu.Lock()
+	defer c.runHooks() // runs after Unlock (LIFO) — hooks must not run under c.mu
 	defer c.mu.Unlock()
 	results := make([]Result, len(accts))
 	for i, a := range accts {
@@ -281,15 +294,39 @@ func (c *DevClient) CreateAccounts(accts []Account) ([]Result, error) {
 	return results, nil
 }
 
+// changedLocked records that state changed; the onChange hook itself runs
+// in runHooks once c.mu has been released (it may call back into the
+// client, e.g. Snapshot for persistence).
 func (c *DevClient) changedLocked() {
-	if c.onChange != nil {
-		c.onChange()
-	}
+	c.pendingChange = true
 }
 
+// eventLocked buffers a transfer event; delivery happens in runHooks after
+// the mutex is released.
 func (c *DevClient) eventLocked(t Transfer) {
-	if c.onEvent != nil {
-		c.onEvent(t)
+	c.pendingEvents = append(c.pendingEvents, t)
+}
+
+// runHooks delivers buffered change/event notifications with c.mu NOT held.
+// Call it deferred BEFORE `defer c.mu.Unlock()` in every mutation so the
+// unlock runs first (LIFO). Hook order per mutation is preserved: onChange
+// once, then the buffered events in order.
+func (c *DevClient) runHooks() {
+	c.mu.Lock()
+	change := c.pendingChange
+	events := c.pendingEvents
+	c.pendingChange = false
+	c.pendingEvents = nil
+	onChange := c.onChange
+	onEvent := c.onEvent
+	c.mu.Unlock()
+	if change && onChange != nil {
+		onChange()
+	}
+	for _, t := range events {
+		if onEvent != nil {
+			onEvent(t)
+		}
 	}
 }
 
@@ -340,6 +377,7 @@ func (c *DevClient) validateParties(t *Transfer) (*Account, *Account, Result) {
 // Transfer posts an immediate (non-pending) double-entry transfer.
 func (c *DevClient) Transfer(t Transfer) (Result, error) {
 	c.mu.Lock()
+	defer c.runHooks() // runs after Unlock (LIFO) — hooks must not run under c.mu
 	defer c.mu.Unlock()
 	if existing, ok := c.transfers[t.ID]; ok {
 		if sameAttrs(*existing, t) {
@@ -371,6 +409,7 @@ func (c *DevClient) Transfer(t Transfer) (Result, error) {
 // PendingTransfer reserves amounts (two-phase; code 1 authorise / 6 hold).
 func (c *DevClient) PendingTransfer(t Transfer) (Result, error) {
 	c.mu.Lock()
+	defer c.runHooks() // runs after Unlock (LIFO) — hooks must not run under c.mu
 	defer c.mu.Unlock()
 	if existing, ok := c.transfers[t.ID]; ok {
 		if sameAttrs(*existing, t) && existing.Pending && !existing.Resolved {
@@ -411,6 +450,7 @@ func (c *DevClient) PendingTransfer(t Transfer) (Result, error) {
 // either way.
 func (c *DevClient) PostPending(pendingID ID, amount uint64, code uint16) (Result, error) {
 	c.mu.Lock()
+	defer c.runHooks() // runs after Unlock (LIFO) — hooks must not run under c.mu
 	defer c.mu.Unlock()
 	pt, ok := c.transfers[pendingID]
 	if !ok {
@@ -474,6 +514,7 @@ func (c *DevClient) PostPending(pendingID ID, amount uint64, code uint16) (Resul
 // unrelated transfer is rejected.
 func (c *DevClient) PostPendingAs(pendingID, postID ID, amount uint64, code uint16) (Result, error) {
 	c.mu.Lock()
+	defer c.runHooks() // runs after Unlock (LIFO) — hooks must not run under c.mu
 	defer c.mu.Unlock()
 	pt, ok := c.transfers[pendingID]
 	if !ok {
@@ -542,6 +583,7 @@ func (c *DevClient) PostPendingAs(pendingID, postID ID, amount uint64, code uint
 // automatically, a mismatched non-zero code is rejected.
 func (c *DevClient) VoidPending(pendingID ID, code uint16) (Result, error) {
 	c.mu.Lock()
+	defer c.runHooks() // runs after Unlock (LIFO) — hooks must not run under c.mu
 	defer c.mu.Unlock()
 	pt, ok := c.transfers[pendingID]
 	if !ok {
@@ -573,6 +615,7 @@ func (c *DevClient) VoidPending(pendingID ID, code uint16) (Result, error) {
 // Returns the voided transfers so the caller can emit expiry events.
 func (c *DevClient) ExpirePendings(t time.Time) []Transfer {
 	c.mu.Lock()
+	defer c.runHooks() // runs after Unlock (LIFO) — hooks must not run under c.mu
 	defer c.mu.Unlock()
 	var expired []Transfer
 	for _, pt := range c.transfers {
@@ -676,4 +719,12 @@ func (c *DevClient) ListTransfers(accountID ID) ([]Transfer, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt < out[j].CreatedAt })
 	return out, nil
+}
+
+// CountTransfers is the O(1) count-only view (avoids the full scan+sort of
+// ListTransfers for overview/count probes).
+func (c *DevClient) CountTransfers() (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.transfers), nil
 }
