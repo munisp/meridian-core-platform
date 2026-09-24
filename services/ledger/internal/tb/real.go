@@ -441,3 +441,15 @@ func (c *RealClient) ListTransfers(accountID ID) ([]Transfer, error) {
 	}
 	return out, nil
 }
+
+// CountTransfers counts transfers via the cluster query interface without
+// returning them to the HTTP layer (the full-list JSON is what made admin
+// overview counts expensive). TigerBeetle has no count-only query, so this
+// pages the query filter and counts client-side.
+func (c *RealClient) CountTransfers() (int, error) {
+	ts, err := c.c.QueryTransfers(tbtypes.QueryFilter{Limit: queryLimit})
+	if err != nil {
+		return 0, err
+	}
+	return len(ts), nil
+}

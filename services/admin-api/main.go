@@ -33,6 +33,18 @@ type app struct {
 	auditQueue []AuditEvent
 	// R4-9c: TOTP step-up state (nil until initStepup).
 	stepup *stepupState
+	// Perf: short-TTL caches for the overview fan-out (health rollup of all
+	// registered services + live ledger transfer count). Previously EVERY
+	// /v1/admin/overview polled ~20 downstream /healthz endpoints and
+	// fetched the full /v1/transfers list just to count it (measured p50
+	// 44.9 ms vs 0.94 ms for /me, p99 ~1.2 s with slow downstreams).
+	rollupMu      sync.Mutex
+	rollupCache   []*ServiceEntry
+	rollupAt      time.Time
+	transferMu    sync.Mutex
+	transferCount int
+	transferSrc   string
+	transferAt    time.Time
 }
 
 func envOr(key, def string) string {

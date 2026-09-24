@@ -29,7 +29,9 @@ const (
 var seedThresholdsPack []byte
 
 type server struct {
-	st      store.DocStore
+	st      store.DocStore // entityStore wrapper (invalidates idx on entity writes)
+	rawSt   store.DocStore // underlying store for index rebuilds
+	idx     *entityIndex
 	cfg     graph.MatchConfig
 	nin     graph.NINAdapter
 	cac     graph.CACAdapter
@@ -146,7 +148,8 @@ func main() {
 		log.Fatal(err)
 	}
 	permChecker = pc
-	s := &server{st: st, cfg: loadMatchConfig(), nin: nin, cac: cac, consent: gate}
+	idx := &entityIndex{}
+	s := &server{st: entityStore{DocStore: st, idx: idx}, rawSt: st, idx: idx, cfg: loadMatchConfig(), nin: nin, cac: cac, consent: gate}
 
 	mux := s.routes()
 	addr := ":" + httpx.Port("8003")
@@ -186,12 +189,33 @@ func (s *server) routes() *http.ServeMux {
 	return mux
 }
 
+// allEntities returns the entity collection from the in-memory index
+// (rebuilt lazily after any write) instead of a full ListInto
+// triple-serialize per request. Tests that build a bare server without the
+// index fall back to the direct store read.
 func (s *server) allEntities() []graph.Entity {
-	var ents []graph.Entity
-	if err := s.st.ListInto("entities", &ents); err != nil {
-		return nil
+	if s.idx == nil {
+		var ents []graph.Entity
+		if err := s.st.ListInto("entities", &ents); err != nil {
+			return nil
+		}
+		return ents
 	}
-	return ents
+	return s.idx.all(s.rawSt)
+}
+
+// entityByTINHash is the O(1) indexed equivalent of scanning allEntities
+// for a TINHash match (first id-sorted match, like the old linear scan).
+func (s *server) entityByTINHash(hash string) (graph.Entity, bool) {
+	if s.idx != nil {
+		return s.idx.findByTINHash(s.rawSt, hash)
+	}
+	for _, e := range s.allEntities() {
+		if e.TINHash == hash {
+			return e, true
+		}
+	}
+	return graph.Entity{}, false
 }
 
 type provisionReq struct {
@@ -224,13 +248,12 @@ func (s *server) provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tinHash := graph.HashTIN(tin)
-	// idempotent: same TIN fusion returns the existing entity
-	for _, e := range s.allEntities() {
-		if e.TINHash == tinHash {
-			httpx.JSON(w, http.StatusOK, map[string]any{
-				"entity": e, "tin": tin, "tin_hash": tinHash, "note": "existing entity (fusion idempotent)"})
-			return
-		}
+	// idempotent: same TIN fusion returns the existing entity (O(1) index
+	// lookup instead of a full-collection load + scan)
+	if e, ok := s.entityByTINHash(tinHash); ok {
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"entity": e, "tin": tin, "tin_hash": tinHash, "note": "existing entity (fusion idempotent)"})
+		return
 	}
 	et := req.EntityType
 	if et == "" {
@@ -302,12 +325,11 @@ func (s *server) verifyTIN(w http.ResponseWriter, r *http.Request) {
 	if !s.gateVerification(w, r, hash, "tin_verification", req.LawfulBasis) {
 		return
 	}
-	for _, e := range s.allEntities() {
-		if e.TINHash == hash {
-			httpx.JSON(w, http.StatusOK, map[string]any{
-				"valid": true, "tin_hash": hash, "entity_id": e.ID, "entity_type": e.EntityType})
-			return
-		}
+	// O(1) tin_hash index lookup instead of a full-collection load + scan.
+	if e, ok := s.entityByTINHash(hash); ok {
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"valid": true, "tin_hash": hash, "entity_id": e.ID, "entity_type": e.EntityType})
+		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"valid": false, "tin_hash": hash})
 }
@@ -377,6 +399,9 @@ func (s *server) cacProvider() string {
 }
 
 func (s *server) findEntity(id string) (graph.Entity, bool) {
+	if s.idx != nil {
+		return s.idx.findByID(s.rawSt, id) // O(1) index lookup
+	}
 	for _, e := range s.allEntities() {
 		if e.ID == id {
 			return e, true

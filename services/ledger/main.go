@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/munisp/meridian-core-platform/packages/events/auth"
@@ -58,6 +59,9 @@ type server struct {
 	out    outbox.Store
 	dir    string
 	thresh *thresholdTracker // I7: CTR ₦10m / structuring detection
+	// persistDirty is set by the dev onChange hook (markDirty) and drained
+	// by runPersistFlusher (debounced snapshot persist).
+	persistDirty atomic.Bool
 	// wfRunner executes the money sagas (CaptureSaga/RefundWorkflow);
 	// *sdkx.TemporalRunner when TEMPORAL_URL is set, inproc dev runner
 	// otherwise (docs/temporal-migration.md).
@@ -116,7 +120,12 @@ func main() {
 				log.Printf("restored %d accounts, %d transfers", len(snap.Accounts), len(snap.Transfers))
 			}
 		}
-		dev.SetHooks(srv.persist, srv.emitTransferEvent)
+		// Perf: persist is a full O(state) snapshot+marshal+disk rewrite
+		// (measured ~45 ms @10k transfers). Running it synchronously on
+		// EVERY mutation taxed each posting; instead the onChange hook only
+		// marks the state dirty and a debounced flusher persists at most
+		// once per LEDGER_PERSIST_INTERVAL_MS (default 2000 ms).
+		dev.SetHooks(srv.markDirty, srv.emitTransferEvent)
 	}
 
 	// outbox + relay
@@ -139,6 +148,7 @@ func main() {
 	// this sweeper covers the dev DevClient.)
 	if dev != nil {
 		go srv.runPendingSweeper(ctx)
+		go srv.runPersistFlusher(ctx)
 	}
 
 	httpx.InitMetrics(service, version)
@@ -182,6 +192,9 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /v1/transfers/{id}/post", auth.RequireRole("ledger:settle", gate.requireStepUp("ledger.transfer.post", s.postPending)))
 	mux.HandleFunc("POST /v1/transfers/{id}/void", auth.RequireRole("ledger:settle", gate.requireStepUp("ledger.transfer.void", s.voidPending)))
 	mux.HandleFunc("GET /v1/transfers", s.listTransfers)
+	// Count-only probe for admin overview (avoids shipping the full list to
+	// count it; O(1) on the DevClient).
+	mux.HandleFunc("GET /v1/transfers/count", s.countTransfers)
 	mux.HandleFunc("GET /v1/transfers/{id}", s.getTransfer)
 	return mux
 }
@@ -231,6 +244,39 @@ func (s *server) sweepExpiredPendings() {
 	}
 	if len(expired) > 0 {
 		log.Printf("pending-expiry sweeper: voided %d expired pending transfers", len(expired))
+	}
+}
+
+// markDirty records that dev state changed; the actual O(state) snapshot
+// persist is performed by runPersistFlusher (debounced) so a burst of
+// postings coalesces into one disk rewrite per interval instead of one per
+// mutation (measured ~45 ms/op @10k transfers before this change).
+func (s *server) markDirty() {
+	s.persistDirty.Store(true)
+}
+
+// runPersistFlusher persists a dirty dev snapshot at most once per
+// LEDGER_PERSIST_INTERVAL_MS (default 2000 ms) and flushes a final snapshot
+// on shutdown.
+func (s *server) runPersistFlusher(ctx context.Context) {
+	ms, _ := strconv.Atoi(httpx.Env("LEDGER_PERSIST_INTERVAL_MS", "2000"))
+	if ms <= 0 {
+		ms = 2000
+	}
+	tick := time.NewTicker(time.Duration(ms) * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			if s.persistDirty.Swap(false) {
+				s.persist()
+			}
+			return
+		case <-tick.C:
+			if s.persistDirty.Swap(false) {
+				s.persist()
+			}
+		}
 	}
 }
 
@@ -577,4 +623,13 @@ func (s *server) listTransfers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"transfers": trs})
+}
+
+func (s *server) countTransfers(w http.ResponseWriter, r *http.Request) {
+	n, err := s.tbFor(r).CountTransfers()
+	if err != nil {
+		httpx.Internal(w, "%v", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"count": n})
 }

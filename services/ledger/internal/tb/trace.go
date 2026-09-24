@@ -149,3 +149,10 @@ func (c *tracedClient) ListTransfers(id ID) ([]Transfer, error) {
 	endNoCode(span, err)
 	return t, err
 }
+
+func (c *tracedClient) CountTransfers() (int, error) {
+	span := c.start("count_transfers")
+	n, err := c.inner.CountTransfers()
+	endNoCode(span, err)
+	return n, err
+}
